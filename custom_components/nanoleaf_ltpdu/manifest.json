@@ -1,0 +1,20 @@
+{
+  "domain": "nanoleaf_ltpdu",
+  "name": "Nanoleaf LTPDU (Secretlab MAGRGB and related)",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["zeroconf", "bluetooth"],
+  "after_dependencies": ["thread", "otbr"],
+  "documentation": "https://github.com/zackman0010/ha-nanoleaf-ltpdu",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/zackman0010/ha-nanoleaf-ltpdu/issues",
+  "requirements": ["pycryptodomex>=3.20.0", "bleak-retry-connector>=3.5.0"],
+  "version": "0.1.0",
+  "zeroconf": ["_ltpdu._udp.local."],
+  "bluetooth": [
+    {
+      "manufacturer_id": 2059,
+      "manufacturer_data_start": [78, 76, 77, 48]
+    }
+  ]
+}

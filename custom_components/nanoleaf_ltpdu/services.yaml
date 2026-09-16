@@ -1,0 +1,59 @@
+get_scene_capabilities:
+  fields: {}
+
+preview_scene:
+  target:
+    entity:
+      domain: light
+      integration: nanoleaf_ltpdu
+  fields:
+    motion_style:
+      required: true
+      selector:
+        select:
+          options: ["fade", "random", "highlight", "flow", "stripes"]
+    motion_params:
+      required: true
+      example: '{"speed": 30, "delay": 10, "loop": true}'
+      selector:
+        object: {}
+    colors:
+      required: true
+      example: '[{"hue": 0, "saturation": 100, "brightness": 100}]'
+      selector:
+        object: {}
+
+save_scene:
+  target:
+    entity:
+      domain: light
+      integration: nanoleaf_ltpdu
+  fields:
+    name:
+      required: true
+      selector:
+        text: {}
+    motion_style:
+      required: true
+      selector:
+        select:
+          options: ["fade", "random", "highlight", "flow", "stripes"]
+    motion_params:
+      required: true
+      selector:
+        object: {}
+    colors:
+      required: true
+      selector:
+        object: {}
+
+delete_scene:
+  target:
+    entity:
+      domain: light
+      integration: nanoleaf_ltpdu
+  fields:
+    name:
+      required: true
+      selector:
+        text: {}
