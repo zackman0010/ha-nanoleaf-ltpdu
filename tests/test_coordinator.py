@@ -44,7 +44,7 @@ def config_entry() -> MockConfigEntry:
     return MockConfigEntry(
         domain=DOMAIN,
         unique_id="AB12",
-        data={CONF_LABEL_ID: "AB12", CONF_HOST: "::1", CONF_AUTH_TOKEN: "00112233445566778899aabbccddeeff"},
+        data={CONF_LABEL_ID: "AB12", CONF_HOST: "::1", CONF_AUTH_TOKEN: "00112233445566778899aabbccddeeff"},  # gitleaks:allow
     )
 
 

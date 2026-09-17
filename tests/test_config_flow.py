@@ -182,7 +182,7 @@ async def test_manual_thread_creds_builds_credentials_and_proceeds(hass: HomeAss
                 CONF_THREAD_CHANNEL: 25,
                 CONF_THREAD_PANID: "1234",
                 CONF_THREAD_EXTPANID: "1122334455667788",
-                CONF_THREAD_NETWORKKEY: "00112233445566778899aabbccddeeff",
+                CONF_THREAD_NETWORKKEY: "00112233445566778899aabbccddeeff",  # gitleaks:allow
             }
         )
     assert result == {"stub": True}
@@ -191,7 +191,7 @@ async def test_manual_thread_creds_builds_credentials_and_proceeds(hass: HomeAss
         channel=25,
         panid_hex="1234",
         extpanid_hex="1122334455667788",
-        networkkey_hex="00112233445566778899aabbccddeeff",
+        networkkey_hex="00112233445566778899aabbccddeeff",  # gitleaks:allow
     )
 
 

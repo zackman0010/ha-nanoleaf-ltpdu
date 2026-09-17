@@ -139,7 +139,7 @@ def test_thread_credentials_pan_id_byte_order_matches_between_both_constructors(
     channel = 25
     panid_hex = "1234"
     extpanid_hex = "1122334455667788"
-    networkkey_hex = "00112233445566778899aabbccddeeff"
+    networkkey_hex = "00112233445566778899aabbccddeeff"  # gitleaks:allow
 
     via_ot_ctl = ThreadCredentials.from_ot_ctl_dataset(
         network_name=network_name,
