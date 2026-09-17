@@ -1,7 +1,7 @@
 # Nanoleaf LTPDU for Home Assistant
 
 A Home Assistant custom integration for Nanoleaf's Thread/BLE **LTPDU** protocol — the
-proprietary control protocol used by devices like the Secretlab MAGRGB desk light
+proprietary control protocol used by devices like the SecretLab MagRGB desk light
 strips, Nanoleaf Essentials bulbs, and other Nanoleaf "Essentials" products that pair
 directly over Bluetooth and are controlled over Thread (CoAP), independent of
 Nanoleaf's cloud, the Nanoleaf app, and Apple HomeKit.
@@ -30,7 +30,7 @@ integration talks the device's native protocol directly, exposing:
 
 ## Supported devices
 
-Confirmed against Secretlab MAGRGB desk light strips. The underlying protocol is shared
+Confirmed against SecretLab MagRGB desk light strips. The underlying protocol is shared
 across Nanoleaf's broader "Essentials" Thread/BLE product line (bulbs, other strips),
 but device-matching (BLE manufacturer-data prefix, mDNS service type) has only been
 validated against MAGRGB hardware so far — other LTPDU devices likely work but haven't

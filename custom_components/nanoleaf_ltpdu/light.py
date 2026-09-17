@@ -90,7 +90,10 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], RestoreEnt
         self._attr_unique_id = label_id
         self._attr_device_info = {
             "identifiers": {(DOMAIN, label_id)},
-            "name": f"Secretlab MAGRGB {label_id}",
+            # entry.title already reflects the device's own discovered model name
+            # (e.g. "SecretLab MagRGB AB12", or another Nanoleaf Essentials model for
+            # a non-strip device on the same LTPDU protocol — see config_flow.py).
+            "name": entry.title,
             "manufacturer": "Nanoleaf",
         }
         self._restored_effect: str | None = None

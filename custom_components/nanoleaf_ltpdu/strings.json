@@ -19,7 +19,7 @@
         }
       },
       "zeroconf_confirm": {
-        "title": "Add Secretlab MAGRGB {label_id}",
+        "title": "Add {name}",
         "description": "Found \"{label_id}\" on your Thread network. Enter its auth token to add it.",
         "data": {
           "auth_token": "Auth token (hex)"

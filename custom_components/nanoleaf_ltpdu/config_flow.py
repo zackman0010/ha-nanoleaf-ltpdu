@@ -72,21 +72,40 @@ STEP_USER_SCHEMA = vol.Schema(
 )
 
 
+def _instance_name_from_zeroconf_name(name: str) -> str:
+    """The mDNS instance name is literally the device's own advertised
+    "<model> <label_id>" string, e.g. 'SecretLab MagRGB AB12._ltpdu._udp.local.' for a
+    MAGRGB strip — but this integration also matches other Nanoleaf "Essentials"
+    Thread/BLE devices sharing the same LTPDU protocol (see README), which advertise
+    their own different model name here instead. This is everything before the
+    service-type suffix."""
+    return name.split(f".{ZEROCONF_SERVICE_TYPE}")[0]
+
+
 def _label_id_from_zeroconf_name(name: str) -> str:
-    """The mDNS instance name is literally the strip's own advertised name, e.g.
-    'Secretlab MAGRGB AB12._ltpdu._udp.local.' — the label ID is the last space-
-    separated token before the service-type suffix."""
-    instance_name = name.split(f".{ZEROCONF_SERVICE_TYPE}")[0]
-    return instance_name.rsplit(" ", 1)[-1]
+    """The label ID is the last space-separated token of the instance name."""
+    return _instance_name_from_zeroconf_name(name).rsplit(" ", 1)[-1]
 
 
 def _label_id_from_ble_name(name: str | None) -> str | None:
-    """The BLE advertised local_name is the same 'Secretlab MAGRGB <label_id>' shape
-    as the mDNS instance name (confirmed live this session, ble_scan.py) — same
-    last-space-token extraction, no service-type suffix to strip this time."""
+    """The BLE advertised local_name is the same '<model> <label_id>' shape as the
+    mDNS instance name (confirmed live this session, ble_scan.py) — same last-space-
+    token extraction, no service-type suffix to strip this time."""
     if not name:
         return None
     return name.rsplit(" ", 1)[-1]
+
+
+# The real MAGRGB strips' own firmware advertises their model name with this wrong
+# capitalization (confirmed live this session, ble_scan.py/mdns capture) — corrected
+# here for display so titles read "SecretLab MagRGB" everywhere, without altering the
+# advertised name of any other Nanoleaf Essentials device in the same LTPDU family
+# (e.g. the A19 bulbs), which isn't ours to "fix".
+_DISPLAY_NAME_WORD_CORRECTIONS = {"secretlab": "SecretLab", "magrgb": "MagRGB"}
+
+
+def _correct_display_name_casing(name: str) -> str:
+    return " ".join(_DISPLAY_NAME_WORD_CORRECTIONS.get(word.lower(), word) for word in name.split(" "))
 
 
 def _try_connect(host: str, port: int, auth_token_hex: str) -> None:
@@ -107,6 +126,11 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovered_host: str | None = None
         self._discovered_port: int = DEFAULT_PORT
         self._label_id: str | None = None
+        self._device_name: str | None = None  # e.g. "SecretLab MagRGB AB12" — the
+        # discovered device's own model name (case-corrected), set by
+        # async_step_zeroconf and used for both the discovery card and the eventual
+        # config entry's title so it reflects the actual device, not just this
+        # integration's namesake product.
 
         # BLE onboarding state (Milestone 4). The BleakClient + BleProvisioner are
         # deliberately kept alive across multiple flow steps (pairing_code entry,
@@ -131,6 +155,7 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
             await self._ble_client.disconnect()
 
     async def async_step_zeroconf(self, discovery_info: ZeroconfServiceInfo) -> ConfigFlowResult:
+        instance_name = _instance_name_from_zeroconf_name(discovery_info.name)
         label_id = _label_id_from_zeroconf_name(discovery_info.name)
         await self.async_set_unique_id(label_id)
         # ZeroconfServiceInfo.ip_address is already the most-recently-updated address
@@ -141,7 +166,8 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovered_host = host
         self._discovered_port = discovery_info.port or DEFAULT_PORT
         self._label_id = label_id
-        self.context["title_placeholders"] = {"name": f"Secretlab MAGRGB {label_id}"}
+        self._device_name = _correct_display_name_casing(instance_name)
+        self.context["title_placeholders"] = {"name": self._device_name}
 
         # A strip that was just onboarded via this integration's own BLE flow (below)
         # stashes its freshly-minted token here before its Thread join propagates to
@@ -166,7 +192,7 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
             else:
                 self.hass.data.get(PENDING_TOKENS_KEY, {}).pop(self._label_id, None)
                 return self.async_create_entry(
-                    title=f"Secretlab MAGRGB {self._label_id}",
+                    title=self._device_name or f"SecretLab MagRGB {self._label_id}",
                     data={
                         CONF_LABEL_ID: self._label_id,
                         CONF_HOST: self._discovered_host,
@@ -179,7 +205,10 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="zeroconf_confirm",
             data_schema=vol.Schema({vol.Required(CONF_AUTH_TOKEN): str}),
             errors=errors,
-            description_placeholders={"label_id": self._label_id or ""},
+            description_placeholders={
+                "label_id": self._label_id or "",
+                "name": self._device_name or "",
+            },
         )
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -202,7 +231,7 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "cannot_connect"
             else:
                 return self.async_create_entry(
-                    title=f"Secretlab MAGRGB {user_input[CONF_LABEL_ID]}",
+                    title=f"SecretLab MagRGB {user_input[CONF_LABEL_ID]}",
                     data=user_input,
                 )
 
@@ -229,7 +258,10 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
         self._label_id = _label_id_from_ble_name(discovery_info.name)
         await self.async_set_unique_id(f"ble_onboarding_{discovery_info.address}")
         self._abort_if_unique_id_configured()
-        self.context["title_placeholders"] = {"name": discovery_info.name or discovery_info.address}
+        display_name = (
+            _correct_display_name_casing(discovery_info.name) if discovery_info.name else discovery_info.address
+        )
+        self.context["title_placeholders"] = {"name": display_name}
         return await self.async_step_ble_pairing_code()
 
     async def async_step_ble_scan(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:

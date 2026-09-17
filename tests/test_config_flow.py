@@ -249,6 +249,73 @@ async def test_ble_onboarding_done_stashes_token_and_disconnects(hass: HomeAssis
     fake_client.disconnect.assert_awaited_once()
 
 
+def test_correct_display_name_casing_fixes_only_the_magrgb_brand_words() -> None:
+    # The real strip's own firmware advertises this wrong-cased — fixed for display.
+    assert cf._correct_display_name_casing("Secretlab MAGRGB AB12") == "SecretLab MagRGB AB12"
+    # Other Nanoleaf Essentials devices on the same LTPDU protocol advertise their own
+    # model name, which isn't ours to rewrite.
+    assert cf._correct_display_name_casing("Nanoleaf Essentials A19 XY34") == "Nanoleaf Essentials A19 XY34"
+
+
+def test_instance_and_label_id_extraction_from_zeroconf_name() -> None:
+    name = "Nanoleaf Essentials A19 XY34._ltpdu._udp.local."
+    assert cf._instance_name_from_zeroconf_name(name) == "Nanoleaf Essentials A19 XY34"
+    assert cf._label_id_from_zeroconf_name(name) == "XY34"
+
+
+async def test_zeroconf_title_corrects_casing_for_a_magrgb_strip(hass: HomeAssistant) -> None:
+    flow = _make_flow(hass)
+
+    class _FakeZeroconfInfo:
+        name = "Secretlab MAGRGB AB12._ltpdu._udp.local."
+        ip_address = "fd12:3456:789a:1:1111:2222:3333:4444"
+        port = 5683
+
+    with (
+        patch.object(cf.NanoleafLtpduConfigFlow, "async_set_unique_id", AsyncMock(return_value=None)),
+        patch.object(cf.NanoleafLtpduConfigFlow, "_abort_if_unique_id_configured", lambda self, **kw: None),
+    ):
+        await flow.async_step_zeroconf(_FakeZeroconfInfo())
+
+    assert flow._device_name == "SecretLab MagRGB AB12"
+    assert flow.context["title_placeholders"] == {"name": "SecretLab MagRGB AB12"}
+
+
+async def test_zeroconf_title_uses_the_actual_model_for_a_non_magrgb_device(hass: HomeAssistant) -> None:
+    """A discovered device that isn't a MAGRGB strip (e.g. one of the Essentials A19
+    bulbs, which share the same LTPDU zeroconf service) must not be mislabeled with
+    this integration's namesake product name."""
+    flow = _make_flow(hass)
+
+    class _FakeZeroconfInfo:
+        name = "Nanoleaf Essentials A19 XY34._ltpdu._udp.local."
+        ip_address = "fd12:3456:789a:1:1111:2222:3333:4444"
+        port = 5683
+
+    with (
+        patch.object(cf.NanoleafLtpduConfigFlow, "async_set_unique_id", AsyncMock(return_value=None)),
+        patch.object(cf.NanoleafLtpduConfigFlow, "_abort_if_unique_id_configured", lambda self, **kw: None),
+    ):
+        await flow.async_step_zeroconf(_FakeZeroconfInfo())
+
+    assert flow._device_name == "Nanoleaf Essentials A19 XY34"
+    assert flow.context["title_placeholders"] == {"name": "Nanoleaf Essentials A19 XY34"}
+
+
+async def test_bluetooth_discovery_title_corrects_casing(hass: HomeAssistant) -> None:
+    flow = _make_flow(hass)
+    discovery_info = _FakeServiceInfo("AA:BB:CC:DD:EE:FF", "Secretlab MAGRGB AB12")
+
+    with (
+        patch.object(cf.NanoleafLtpduConfigFlow, "async_set_unique_id", AsyncMock(return_value=None)),
+        patch.object(cf.NanoleafLtpduConfigFlow, "_abort_if_unique_id_configured", lambda self, **kw: None),
+        patch.object(cf.NanoleafLtpduConfigFlow, "async_step_ble_pairing_code", AsyncMock(return_value={"stub": True})),
+    ):
+        await flow.async_step_bluetooth(discovery_info)
+
+    assert flow.context["title_placeholders"] == {"name": "SecretLab MagRGB AB12"}
+
+
 async def test_zeroconf_with_pending_token_skips_the_form(hass: HomeAssistant) -> None:
     """The whole point of PENDING_TOKENS_KEY: a strip onboarded via BLE moments ago
     shouldn't make the user re-enter a token they already have."""
