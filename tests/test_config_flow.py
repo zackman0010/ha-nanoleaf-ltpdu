@@ -22,6 +22,7 @@ import custom_components.nanoleaf_ltpdu.config_flow as cf
 from custom_components.nanoleaf_ltpdu.const import (
     CONF_AUTH_TOKEN,
     CONF_BLE_ADDRESS,
+    CONF_LABEL_ID,
     CONF_PAIRING_CODE,
     CONF_THREAD_CHANNEL,
     CONF_THREAD_EXTPANID,
@@ -277,8 +278,8 @@ async def test_zeroconf_title_corrects_casing_for_a_magrgb_strip(hass: HomeAssis
     ):
         await flow.async_step_zeroconf(_FakeZeroconfInfo())
 
-    assert flow._device_name == "SecretLab MagRGB AB12"
-    assert flow.context["title_placeholders"] == {"name": "SecretLab MagRGB AB12"}
+    assert flow._device_name == "SecretLab MagRGB AB12"  # clean — used for the entry/device title
+    assert flow.context["title_placeholders"] == {"name": "SecretLab MagRGB AB12 — found on network"}
 
 
 async def test_zeroconf_title_uses_the_actual_model_for_a_non_magrgb_device(hass: HomeAssistant) -> None:
@@ -299,11 +300,25 @@ async def test_zeroconf_title_uses_the_actual_model_for_a_non_magrgb_device(hass
         await flow.async_step_zeroconf(_FakeZeroconfInfo())
 
     assert flow._device_name == "Nanoleaf Essentials A19 XY34"
-    assert flow.context["title_placeholders"] == {"name": "Nanoleaf Essentials A19 XY34"}
+    assert flow.context["title_placeholders"] == {"name": "Nanoleaf Essentials A19 XY34 — found on network"}
+
+
+class _FakeConfigEntry:
+    def __init__(self, label_id: str) -> None:
+        self.data = {CONF_LABEL_ID: label_id}
+
+
+class _FakeConfigEntries:
+    def __init__(self, entries: list[_FakeConfigEntry]) -> None:
+        self._entries = entries
+
+    def async_entries(self, domain: str) -> list[_FakeConfigEntry]:
+        return self._entries
 
 
 async def test_bluetooth_discovery_title_corrects_casing(hass: HomeAssistant) -> None:
     flow = _make_flow(hass)
+    flow.hass.config_entries = _FakeConfigEntries([])  # not already configured
     discovery_info = _FakeServiceInfo("AA:BB:CC:DD:EE:FF", "Secretlab MAGRGB AB12")
 
     with (
@@ -313,7 +328,28 @@ async def test_bluetooth_discovery_title_corrects_casing(hass: HomeAssistant) ->
     ):
         await flow.async_step_bluetooth(discovery_info)
 
-    assert flow.context["title_placeholders"] == {"name": "SecretLab MagRGB AB12"}
+    assert flow.context["title_placeholders"] == {"name": "SecretLab MagRGB AB12 — new pairing via Bluetooth"}
+
+
+async def test_bluetooth_discovery_aborts_when_strip_already_configured(hass: HomeAssistant) -> None:
+    """The LTPDU BLE broadcast keeps advertising after a strip joins Thread (unlike
+    its separate HomeKit BLE address, which stops) — so an already-configured strip
+    keeps matching this integration's Bluetooth matcher forever. Re-running the
+    pairing handshake against it would mint a new auth token as if it were
+    unprovisioned, so this must bail out before ever showing a card."""
+    flow = _make_flow(hass)
+    flow.hass.config_entries = _FakeConfigEntries([_FakeConfigEntry("AB12")])
+    discovery_info = _FakeServiceInfo("AA:BB:CC:DD:EE:FF", "Secretlab MAGRGB AB12")
+
+    with (
+        patch.object(cf.NanoleafLtpduConfigFlow, "async_set_unique_id", AsyncMock(return_value=None)),
+        patch.object(cf.NanoleafLtpduConfigFlow, "async_step_ble_pairing_code", AsyncMock(return_value={"stub": True})),
+    ):
+        result = await flow.async_step_bluetooth(discovery_info)
+
+    assert result["type"].value == "abort"
+    assert result["reason"] == "already_configured"
+    assert "title_placeholders" not in flow.context
 
 
 async def test_zeroconf_with_pending_token_skips_the_form(hass: HomeAssistant) -> None:

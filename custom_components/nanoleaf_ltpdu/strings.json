@@ -20,7 +20,7 @@
       },
       "zeroconf_confirm": {
         "title": "Add {name}",
-        "description": "Found \"{label_id}\" on your Thread network. Enter its auth token to add it.",
+        "description": "Found \"{label_id}\" on your Thread network. Enter its existing auth token (from Nanoleaf Desktop) to add it — this does not re-pair the strip.",
         "data": {
           "auth_token": "Auth token (hex)"
         }
@@ -34,7 +34,7 @@
       },
       "ble_pairing_code": {
         "title": "Enter the pairing code",
-        "description": "Enter the pairing code printed on {label_id}'s physical label.",
+        "description": "Enter the pairing code printed on {label_id}'s physical label. This pairs it as a new device and mints a new auth token — only do this for a strip that isn't already set up in Home Assistant.",
         "data": {
           "pairing_code": "Pairing code"
         }

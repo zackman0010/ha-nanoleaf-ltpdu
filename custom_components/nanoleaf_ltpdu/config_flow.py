@@ -167,7 +167,14 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovered_port = discovery_info.port or DEFAULT_PORT
         self._label_id = label_id
         self._device_name = _correct_display_name_casing(instance_name)
-        self.context["title_placeholders"] = {"name": self._device_name}
+        # The suffix is discovery-card wording only — self._device_name (used for the
+        # eventual entry/device registry title) stays clean of it. It exists because a
+        # strip that's already Thread-joined but not yet added to HA (e.g. set up
+        # through Nanoleaf's own app) is discoverable via *both* this zeroconf service
+        # and its still-advertising LTPDU BLE broadcast (see async_step_bluetooth) —
+        # callers need to tell the two cards apart: this one just needs the strip's
+        # existing auth token, the Bluetooth one mints a brand new one.
+        self.context["title_placeholders"] = {"name": f"{self._device_name} — found on network"}
 
         # A strip that was just onboarded via this integration's own BLE flow (below)
         # stashes its freshly-minted token here before its Thread join propagates to
@@ -248,20 +255,40 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_bluetooth(self, discovery_info: BluetoothServiceInfoBleak) -> ConfigFlowResult:
         """Triggered automatically by HA's bluetooth integration when a device
         matching manifest.json's matcher (Nanoleaf mfg ID + the "NLM0" advertisement
-        prefix confirmed this session) starts advertising — i.e. a factory-reset
-        strip. Namespaced with a "ble_onboarding_" unique_id prefix, distinct from the
-        final entry's plain label_id unique_id, since this flow doesn't create an
-        entry itself (see module docstring) and BLE addresses rotate on every factory
-        reset anyway, so this dedup key has no long-term meaning beyond "don't show
-        two discovery cards for the same in-progress advertisement."""
+        prefix confirmed this session) starts advertising.
+
+        NOT necessarily a factory-reset strip: each strip has a separate BLE address
+        for HomeKit (which stops advertising once set up) and one for LTPDU, and the
+        LTPDU one keeps advertising indefinitely even after the strip has joined
+        Thread and started advertising `_ltpdu._udp.local.` over zeroconf too
+        (confirmed live this session). So an already-configured strip will keep
+        matching this matcher forever — re-running the BLE pairing handshake against
+        it would mint it a brand new auth token as if it were unprovisioned, which is
+        never correct for a strip HA already has an entry for. Bail out before
+        showing a card at all in that case.
+
+        Namespaced with a "ble_onboarding_" unique_id prefix, distinct from the final
+        entry's plain label_id unique_id, since this flow doesn't create an entry
+        itself (see module docstring) and BLE addresses rotate on every factory reset
+        anyway, so this dedup key has no long-term meaning beyond "don't show two
+        discovery cards for the same in-progress advertisement."""
         self._ble_address = discovery_info.address
         self._label_id = _label_id_from_ble_name(discovery_info.name)
+
+        if self._label_id is not None:
+            for entry in self.hass.config_entries.async_entries(DOMAIN):
+                if entry.data.get(CONF_LABEL_ID) == self._label_id:
+                    return self.async_abort(reason="already_configured")
+
         await self.async_set_unique_id(f"ble_onboarding_{discovery_info.address}")
         self._abort_if_unique_id_configured()
         display_name = (
             _correct_display_name_casing(discovery_info.name) if discovery_info.name else discovery_info.address
         )
-        self.context["title_placeholders"] = {"name": display_name}
+        # See the "found on network" suffix in async_step_zeroconf — this is the other
+        # half of that same pair of discovery cards, for a strip that's already
+        # Thread-joined (e.g. via Nanoleaf's own app) but not yet added to HA.
+        self.context["title_placeholders"] = {"name": f"{display_name} — new pairing via Bluetooth"}
         return await self.async_step_ble_pairing_code()
 
     async def async_step_ble_scan(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
