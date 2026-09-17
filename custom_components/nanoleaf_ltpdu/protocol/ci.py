@@ -1,9 +1,7 @@
 """
 ciCommand (scene/effect) binary sub-format. This uses a DIFFERENT framing convention
 than the outer TLV scheme used everywhere else in the protocol: each block here is
-tag(1 byte) + len(1 byte) + data, not tag(2B)+len(2B). Fully reverse-engineered and
-cross-validated (including against the Android app's own TlvType enum) — see
-project_magrgb_protocol_reverse_engineering.md, "ciCommand / Scene protocol".
+tag(1 byte) + len(1 byte) + data, not tag(2B)+len(2B).
 """
 from __future__ import annotations
 
@@ -29,7 +27,7 @@ MOTIONS = {
     0x01: "Fade",  # params: Speed, Delay, Loop
 }
 
-# Confirmed ranges (identical across every motion that has the field):
+# Ranges (identical across every motion that has the field):
 #   Speed: max=0x01, min=0x58 (88) — INVERTED, low byte = fast
 #   Delay: min=0x00, max=0x58 (88)
 #   Segment / First Colour Frequency: min=0x00, max=0x64 (100)

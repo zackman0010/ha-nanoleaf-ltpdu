@@ -2,17 +2,14 @@
 Thread network credential handoff TLV — sent as an ordinary LTPDU command over the
 already-established encrypted BLE session from pairing (see ble_provision.py), NOT a
 separate handshake. Uses the same 1-byte-tag/1-byte-len sub-block framing as ci.py,
-not the outer 2-byte TLV scheme used by device.py. Reverse-engineered from Nanoleaf's
-Android app (ThreadNetwork.writeTLVCommandBytes()) — see
-project_magrgb_protocol_reverse_engineering.md, "BLE provisioning".
+not the outer 2-byte TLV scheme used by device.py.
 
-Vendored from magrgb/server/thread_credentials.py, with one addition:
 from_operational_dataset_tlv() builds credentials directly from Home Assistant's own
 active Thread dataset (as returned by homeassistant.components.thread's dataset store,
 a MeshCoP TLV hex string) instead of requiring `ot-ctl dataset active` field values by
-hand. See build_thread_credentials_tlv()'s docstring for the PAN-ID byte-order trap
-this must NOT pre-apply — it's applied exactly once, here, regardless of which
-classmethod built the ThreadCredentials.
+hand. See build_thread_credentials_tlv() for the PAN-ID byte-order swap this must NOT
+pre-apply — it's applied exactly once, there, regardless of which classmethod built
+the ThreadCredentials.
 """
 from __future__ import annotations
 
@@ -51,8 +48,7 @@ class ThreadCredentials:
 
         Import is local (not at module level) so this module stays importable — and
         from_ot_ctl_dataset() usable — in contexts without python_otbr_api installed
-        (e.g. the offline test suite, or the standalone magrgb/server/ CLI tools this
-        was vendored from).
+        (e.g. the offline test suite).
         """
         from python_otbr_api.tlv_parser import MeshcopTLVType, parse_tlv
 

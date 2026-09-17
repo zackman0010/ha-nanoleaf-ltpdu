@@ -1,7 +1,7 @@
 """
-Layer 4: scene service encoding logic, cross-checked against the SAME real
-ground-truth hex already validated in tests/protocol/test_against_capture.py — not
-just internally self-consistent, but tied back to real captured bytes.
+Scene service encoding logic, cross-checked against the same ground-truth hex already
+validated in tests/protocol/test_against_capture.py — not just internally
+self-consistent, but tied back to real captured bytes.
 
 Pure Python — no hass fixture needed for most of this (services.py's encoding
 functions take no HA objects at all), except the entity-level save_scene test, which

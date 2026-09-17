@@ -72,21 +72,33 @@ STEP_USER_SCHEMA = vol.Schema(
 )
 
 
+def _instance_name_from_zeroconf_name(name: str) -> str:
+    """The device's own advertised "<model> <label_id>" name — everything before the
+    service-type suffix. Not always a MAGRGB strip; other Nanoleaf Essentials devices
+    share this same LTPDU zeroconf service under their own model name."""
+    return name.split(f".{ZEROCONF_SERVICE_TYPE}")[0]
+
+
 def _label_id_from_zeroconf_name(name: str) -> str:
-    """The mDNS instance name is literally the strip's own advertised name, e.g.
-    'Secretlab MAGRGB AB12._ltpdu._udp.local.' — the label ID is the last space-
-    separated token before the service-type suffix."""
-    instance_name = name.split(f".{ZEROCONF_SERVICE_TYPE}")[0]
-    return instance_name.rsplit(" ", 1)[-1]
+    """The label ID is the last space-separated token of the instance name."""
+    return _instance_name_from_zeroconf_name(name).rsplit(" ", 1)[-1]
 
 
 def _label_id_from_ble_name(name: str | None) -> str | None:
-    """The BLE advertised local_name is the same 'Secretlab MAGRGB <label_id>' shape
-    as the mDNS instance name (confirmed live this session, ble_scan.py) — same
-    last-space-token extraction, no service-type suffix to strip this time."""
+    """The BLE local_name has the same '<model> <label_id>' shape as the mDNS
+    instance name, just without a service-type suffix to strip."""
     if not name:
         return None
     return name.rsplit(" ", 1)[-1]
+
+
+# The real strips' firmware advertises this brand name mis-cased — corrected here for
+# display without touching any other Nanoleaf Essentials device's own advertised name.
+_DISPLAY_NAME_WORD_CORRECTIONS = {"secretlab": "SecretLab", "magrgb": "MagRGB"}
+
+
+def _correct_display_name_casing(name: str) -> str:
+    return " ".join(_DISPLAY_NAME_WORD_CORRECTIONS.get(word.lower(), word) for word in name.split(" "))
 
 
 def _try_connect(host: str, port: int, auth_token_hex: str) -> None:
@@ -107,14 +119,16 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovered_host: str | None = None
         self._discovered_port: int = DEFAULT_PORT
         self._label_id: str | None = None
+        # Discovered device's own model name (case-corrected), set by
+        # async_step_zeroconf. Used for the entry/device title.
+        self._device_name: str | None = None
 
-        # BLE onboarding state (Milestone 4). The BleakClient + BleProvisioner are
-        # deliberately kept alive across multiple flow steps (pairing_code entry,
-        # thread_creds_source, possibly manual_thread_creds) — the encrypted session
-        # pair() establishes is reused by write_thread_credentials(), so the same BLE
-        # connection must stay open the whole time. See async_remove() for cleanup if
-        # the user abandons the flow partway through.
-        self._ble_discovered: dict[str, str | None] = {}  # address -> label_id, from the ble_scan step
+        # The BleakClient + BleProvisioner are kept alive across multiple flow steps
+        # (pairing_code entry, thread_creds_source, possibly manual_thread_creds) —
+        # the encrypted session pair() establishes is reused by
+        # write_thread_credentials(). See async_remove() for cleanup if the user
+        # abandons the flow partway through.
+        self._ble_discovered: dict[str, str | None] = {}  # address -> label_id
         self._ble_address: str | None = None
         self._ble_client: BleakClientWithServiceCache | None = None
         self._ble_provisioner: BleProvisioner | None = None
@@ -131,6 +145,7 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
             await self._ble_client.disconnect()
 
     async def async_step_zeroconf(self, discovery_info: ZeroconfServiceInfo) -> ConfigFlowResult:
+        instance_name = _instance_name_from_zeroconf_name(discovery_info.name)
         label_id = _label_id_from_zeroconf_name(discovery_info.name)
         await self.async_set_unique_id(label_id)
         # ZeroconfServiceInfo.ip_address is already the most-recently-updated address
@@ -141,12 +156,16 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovered_host = host
         self._discovered_port = discovery_info.port or DEFAULT_PORT
         self._label_id = label_id
-        self.context["title_placeholders"] = {"name": f"Secretlab MAGRGB {label_id}"}
+        self._device_name = _correct_display_name_casing(instance_name)
+        # A strip already Thread-joined but not yet added to HA is discoverable via
+        # both this zeroconf service and its still-advertising LTPDU BLE broadcast
+        # (see async_step_bluetooth) — the suffix tells the two discovery cards apart.
+        # It's card wording only; self._device_name (the entry/device title) stays clean.
+        self.context["title_placeholders"] = {"name": f"{self._device_name} — found on network"}
 
-        # A strip that was just onboarded via this integration's own BLE flow (below)
-        # stashes its freshly-minted token here before its Thread join propagates to
-        # mDNS — if that's what just triggered this discovery, skip asking the user
-        # for a token they'd have no way to look up themselves.
+        # A strip just onboarded via this integration's own BLE flow stashes its
+        # freshly-minted token here before its Thread join propagates to mDNS — skip
+        # asking the user for a token they'd have no way to look up themselves.
         pending_tokens: dict[str, str] = self.hass.data.get(PENDING_TOKENS_KEY, {})
         if label_id in pending_tokens:
             return await self.async_step_zeroconf_confirm({CONF_AUTH_TOKEN: pending_tokens[label_id]})
@@ -166,7 +185,7 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
             else:
                 self.hass.data.get(PENDING_TOKENS_KEY, {}).pop(self._label_id, None)
                 return self.async_create_entry(
-                    title=f"Secretlab MAGRGB {self._label_id}",
+                    title=self._device_name or f"SecretLab MagRGB {self._label_id}",
                     data={
                         CONF_LABEL_ID: self._label_id,
                         CONF_HOST: self._discovered_host,
@@ -179,14 +198,16 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="zeroconf_confirm",
             data_schema=vol.Schema({vol.Required(CONF_AUTH_TOKEN): str}),
             errors=errors,
-            description_placeholders={"label_id": self._label_id or ""},
+            description_placeholders={
+                "label_id": self._label_id or "",
+                "name": self._device_name or "",
+            },
         )
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Entry point from "+ Add Integration": choose manual entry (an
         already-Thread-joined strip whose token you already have) or full BLE
-        onboarding (a factory-reset strip — Milestone 4, see the BLE onboarding
-        section below)."""
+        onboarding (a factory-reset strip)."""
         return self.async_show_menu(step_id="user", menu_options=["manual", "ble_scan"])
 
     async def async_step_manual(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -202,34 +223,52 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "cannot_connect"
             else:
                 return self.async_create_entry(
-                    title=f"Secretlab MAGRGB {user_input[CONF_LABEL_ID]}",
+                    title=f"SecretLab MagRGB {user_input[CONF_LABEL_ID]}",
                     data=user_input,
                 )
 
         return self.async_show_form(step_id="manual", data_schema=STEP_USER_SCHEMA, errors=errors)
 
-    # -- BLE onboarding (Milestone 4) -------------------------------------------------
+    # -- BLE onboarding ----------------------------------------------------------------
     #
-    # Entry points: async_step_bluetooth (HA's manifest matcher found a factory-reset
-    # strip advertising) or async_step_ble_scan (user chose "Add via BLE" from the
+    # Entry points: async_step_bluetooth (HA's manifest matcher found a strip
+    # advertising) or async_step_ble_scan (user chose "Add via BLE" from the
     # async_step_user menu and picks from a live scan). Both converge on
     # async_step_ble_pairing_code once self._ble_address (+ self._label_id, if known)
     # is set.
 
     async def async_step_bluetooth(self, discovery_info: BluetoothServiceInfoBleak) -> ConfigFlowResult:
-        """Triggered automatically by HA's bluetooth integration when a device
-        matching manifest.json's matcher (Nanoleaf mfg ID + the "NLM0" advertisement
-        prefix confirmed this session) starts advertising — i.e. a factory-reset
-        strip. Namespaced with a "ble_onboarding_" unique_id prefix, distinct from the
-        final entry's plain label_id unique_id, since this flow doesn't create an
-        entry itself (see module docstring) and BLE addresses rotate on every factory
-        reset anyway, so this dedup key has no long-term meaning beyond "don't show
-        two discovery cards for the same in-progress advertisement."""
+        """Triggered automatically when a device matches manifest.json's matcher
+        (Nanoleaf mfg ID + the "NLM0" advertisement prefix).
+
+        Each strip has a separate BLE address for HomeKit (stops advertising once set
+        up) and one for LTPDU (keeps advertising indefinitely, even after the strip
+        joins Thread and starts advertising `_ltpdu._udp.local.` over zeroconf too).
+        So an already-configured strip keeps matching this matcher forever —
+        re-running the BLE pairing handshake against it would mint a brand new auth
+        token as if it were unprovisioned, so bail out before showing a card at all.
+
+        Namespaced with a "ble_onboarding_" unique_id prefix, distinct from the final
+        entry's plain label_id unique_id, since this flow doesn't create an entry
+        itself (see module docstring) and BLE addresses rotate on every factory reset
+        anyway, so this dedup key only prevents two cards for the same in-progress
+        advertisement."""
         self._ble_address = discovery_info.address
         self._label_id = _label_id_from_ble_name(discovery_info.name)
+
+        if self._label_id is not None:
+            for entry in self.hass.config_entries.async_entries(DOMAIN):
+                if entry.data.get(CONF_LABEL_ID) == self._label_id:
+                    return self.async_abort(reason="already_configured")
+
         await self.async_set_unique_id(f"ble_onboarding_{discovery_info.address}")
         self._abort_if_unique_id_configured()
-        self.context["title_placeholders"] = {"name": discovery_info.name or discovery_info.address}
+        display_name = (
+            _correct_display_name_casing(discovery_info.name) if discovery_info.name else discovery_info.address
+        )
+        # Other half of the "found on network" pair in async_step_zeroconf, for a
+        # strip that's already Thread-joined but not yet added to HA.
+        self.context["title_placeholders"] = {"name": f"{display_name} — new pairing via Bluetooth"}
         return await self.async_step_ble_pairing_code()
 
     async def async_step_ble_scan(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -304,8 +343,6 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_menu(step_id="thread_creds_source", menu_options=["use_ha_dataset", "manual_thread_creds"])
 
     async def async_step_use_ha_dataset(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Confirmed real and top-level-importable (installed HA 2026.2.3) — see the
-        plan file's note resolving what was originally an open question."""
         dataset_tlv_hex: str | None = None
         try:
             from homeassistant.components.thread import async_get_preferred_dataset
@@ -354,9 +391,7 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
         assert self._ble_provisioner is not None
         assert self._thread_creds is not None
         resp = await self._ble_provisioner.write_thread_credentials(self._thread_creds)
-        # 0x44 = CoAP 2.04 Changed — the confirmed-live success code for this exchange
-        # (session 5's ble_join_thread.py validation against real hardware).
-        if resp.code != 0x44:
+        if resp.code != 0x44:  # CoAP 2.04 Changed
             raise BleProvisionError(f"strip rejected Thread credentials (CoAP code {resp.code:#04x})")
 
     async def async_step_ble_onboarding_done(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:

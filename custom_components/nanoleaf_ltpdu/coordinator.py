@@ -1,11 +1,10 @@
 """DataUpdateCoordinator for a Nanoleaf LTPDU strip, plus the async wrapper around the
-vendored (blocking, synchronous) protocol.device.Device client.
+blocking, synchronous protocol.device.Device client.
 
 Why wrap instead of rewriting device.py as native asyncio: device.py's socket I/O is
-already correct and offline-validated (test_against_capture.py, including the
-session-5 GET-vs-POST regression that silently zeroed real hardware twice before it
-was caught) — a rewrite would risk reintroducing exactly that class of bug for no
-benefit, since DataUpdateCoordinator polling doesn't need concurrent sockets.
+already correct and validated against real hardware (test_against_capture.py) — a
+rewrite risks reintroducing that class of bug for no benefit, since
+DataUpdateCoordinator polling doesn't need concurrent sockets.
 """
 from __future__ import annotations
 
@@ -97,8 +96,7 @@ class NanoleafLtpduCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Scene registry is per-config-entry, not shared/global: scene IDs live in each
         # physical strip's own flash, so the same name on two strips is two
-        # independently-allocated IDs under the hood — see thread_credentials.py-style
-        # note in the plan for why a shared registry would be actively wrong here.
+        # independently-allocated IDs under the hood.
         self._scene_store: Store[dict[str, Any]] = Store(hass, version=1, key=f"{DOMAIN}_{entry.entry_id}_scenes")
         self.scenes: dict[str, int] = {}
 

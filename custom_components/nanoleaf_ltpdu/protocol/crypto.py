@@ -1,10 +1,6 @@
 """
-libECL session crypto — X25519 ECDH + SHA1 KDF + shared-counter AES-128-CTR.
-
-Fully reverse-engineered and validated against live traffic (see project memory
-project_magrgb_protocol_reverse_engineering.md), and independently re-confirmed by
-decompiling Nanoleaf's own Android app — the BLE pairing path uses this exact same
-crypto, byte-for-byte.
+libECL session crypto — X25519 ECDH + SHA1 KDF + shared-counter AES-128-CTR. The BLE
+pairing path (ble_provision.py) uses this exact same crypto, byte-for-byte.
 
   shared_secret = X25519(our_private, their_public)
   key = SHA1(b"AES-NL-OPENAPI-KEY" + shared_secret)[:16]
@@ -13,9 +9,6 @@ crypto, byte-for-byte.
 Then AES-128-CTR with `iv` as the initial big-endian 128-bit counter, consumed as ONE
 continuous keystream shared by BOTH directions of a session (not independent
 per-direction streams).
-
-Mirrored verbatim from magrgb/mitm/crypto.py — keep both copies in sync if this ever
-needs a bugfix.
 """
 from __future__ import annotations
 

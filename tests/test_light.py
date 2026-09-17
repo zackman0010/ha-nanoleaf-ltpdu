@@ -1,17 +1,14 @@
 """
-Real, executed tests for light.py — brightness/color/effect property parsing, the
-brightness-floor bug this whole plan calls out explicitly, effect restore-on-startup,
-and effect clearing when a color is set directly.
+Tests for light.py — brightness/color/effect property parsing, the brightness-floor
+edge case, effect restore-on-startup, and effect clearing when a color is set directly.
 
 Constructed manually (fake coordinator + fake ConfigEntry, no real entity-platform
 registration, `async_write_ha_state`/`async_get_last_state` monkeypatched per-instance)
 rather than via the full `pytest_homeassistant_custom_component` `hass`/entity-platform
-fixtures — see tests/test_coordinator.py's module docstring for why (fcntl on native
-Windows). Verified this doesn't skip anything load-bearing: CoordinatorEntity's and
-RestoreEntity's async_added_to_hass() implementations (checked directly against the
-installed homeassistant package's source) don't touch `self.hass` at all — only
-`self.coordinator.async_add_listener(...)` and `self.async_get_last_state()`, both of
-which this file fakes explicitly and deliberately, not accidentally.
+fixtures — see tests/test_coordinator.py's module docstring for why. This doesn't skip
+anything load-bearing: CoordinatorEntity's and RestoreEntity's async_added_to_hass()
+don't touch `self.hass` at all, only `self.coordinator.async_add_listener(...)` and
+`self.async_get_last_state()`, both faked explicitly here.
 """
 from __future__ import annotations
 

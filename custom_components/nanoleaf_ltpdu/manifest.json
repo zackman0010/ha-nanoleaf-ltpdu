@@ -1,6 +1,6 @@
 {
   "domain": "nanoleaf_ltpdu",
-  "name": "Nanoleaf LTPDU (Secretlab MAGRGB and related)",
+  "name": "Nanoleaf LTPDU (SecretLab MagRGB and related)",
   "codeowners": [],
   "config_flow": true,
   "dependencies": ["zeroconf", "bluetooth"],
