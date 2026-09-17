@@ -159,9 +159,11 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
         self._device_name = _correct_display_name_casing(instance_name)
         # A strip already Thread-joined but not yet added to HA is discoverable via
         # both this zeroconf service and its still-advertising LTPDU BLE broadcast
-        # (see async_step_bluetooth) — the suffix tells the two discovery cards apart.
-        # It's card wording only; self._device_name (the entry/device title) stays clean.
-        self.context["title_placeholders"] = {"name": f"{self._device_name} — found on network"}
+        # (see async_step_bluetooth) — both paths set_unique_id() to the same plain
+        # label_id, so whichever discovery fires second self-aborts as
+        # "already_in_progress" instead of showing a duplicate card. No suffix
+        # needed here to tell them apart.
+        self.context["title_placeholders"] = {"name": self._device_name}
 
         # A strip just onboarded via this integration's own BLE flow stashes its
         # freshly-minted token here before its Thread join propagates to mDNS — skip
@@ -248,11 +250,12 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
         re-running the BLE pairing handshake against it would mint a brand new auth
         token as if it were unprovisioned, so bail out before showing a card at all.
 
-        Namespaced with a "ble_onboarding_" unique_id prefix, distinct from the final
-        entry's plain label_id unique_id, since this flow doesn't create an entry
-        itself (see module docstring) and BLE addresses rotate on every factory reset
-        anyway, so this dedup key only prevents two cards for the same in-progress
-        advertisement."""
+        Uses the same plain label_id as async_step_zeroconf's unique_id (falling back
+        to an address-based one only when the label_id can't be parsed from the
+        advertised name) — async_set_unique_id()'s own raise_on_progress check then
+        automatically aborts whichever of the two discovery sources fires second for
+        the same physical device as "already_in_progress", so a strip that's already
+        Thread-joined but not yet added to HA never gets two separate cards."""
         self._ble_address = discovery_info.address
         self._label_id = _label_id_from_ble_name(discovery_info.name)
 
@@ -261,14 +264,12 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
                 if entry.data.get(CONF_LABEL_ID) == self._label_id:
                     return self.async_abort(reason="already_configured")
 
-        await self.async_set_unique_id(f"ble_onboarding_{discovery_info.address}")
+        await self.async_set_unique_id(self._label_id or f"ble_onboarding_{discovery_info.address}")
         self._abort_if_unique_id_configured()
         display_name = (
             _correct_display_name_casing(discovery_info.name) if discovery_info.name else discovery_info.address
         )
-        # Other half of the "found on network" pair in async_step_zeroconf, for a
-        # strip that's already Thread-joined but not yet added to HA.
-        self.context["title_placeholders"] = {"name": f"{display_name} — new pairing via Bluetooth"}
+        self.context["title_placeholders"] = {"name": display_name}
         return await self.async_step_ble_pairing_code()
 
     async def async_step_ble_scan(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:

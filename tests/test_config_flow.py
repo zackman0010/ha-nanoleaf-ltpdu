@@ -279,7 +279,7 @@ async def test_zeroconf_title_corrects_casing_for_a_magrgb_strip(hass: HomeAssis
         await flow.async_step_zeroconf(_FakeZeroconfInfo())
 
     assert flow._device_name == "SecretLab MagRGB AB12"  # clean — used for the entry/device title
-    assert flow.context["title_placeholders"] == {"name": "SecretLab MagRGB AB12 — found on network"}
+    assert flow.context["title_placeholders"] == {"name": "SecretLab MagRGB AB12"}
 
 
 async def test_zeroconf_title_uses_the_actual_model_for_a_non_magrgb_device(hass: HomeAssistant) -> None:
@@ -300,7 +300,7 @@ async def test_zeroconf_title_uses_the_actual_model_for_a_non_magrgb_device(hass
         await flow.async_step_zeroconf(_FakeZeroconfInfo())
 
     assert flow._device_name == "Nanoleaf Essentials A19 XY34"
-    assert flow.context["title_placeholders"] == {"name": "Nanoleaf Essentials A19 XY34 — found on network"}
+    assert flow.context["title_placeholders"] == {"name": "Nanoleaf Essentials A19 XY34"}
 
 
 class _FakeConfigEntry:
@@ -328,7 +328,44 @@ async def test_bluetooth_discovery_title_corrects_casing(hass: HomeAssistant) ->
     ):
         await flow.async_step_bluetooth(discovery_info)
 
-    assert flow.context["title_placeholders"] == {"name": "SecretLab MagRGB AB12 — new pairing via Bluetooth"}
+    assert flow.context["title_placeholders"] == {"name": "SecretLab MagRGB AB12"}
+
+
+async def test_bluetooth_and_zeroconf_use_the_same_unique_id_for_the_same_device(hass: HomeAssistant) -> None:
+    """The actual cross-source dedup mechanism: both discovery paths must call
+    async_set_unique_id() with the identical value for the same physical device, so
+    HA's own FlowManager (async_set_unique_id()'s built-in raise_on_progress check)
+    auto-aborts whichever of the two fires second as "already_in_progress" — a strip
+    that's already Thread-joined but not yet added to HA must never show two separate
+    cards. This doesn't exercise that abort itself (this test suite's bare hass has no
+    real FlowManager — see module docstring), but proves the precondition that makes
+    it work: matching unique_id values."""
+    zeroconf_flow = _make_flow(hass)
+
+    class _FakeZeroconfInfo:
+        name = "Secretlab MAGRGB AB12._ltpdu._udp.local."
+        ip_address = "fd12:3456:789a:1:1111:2222:3333:4444"
+        port = 5683
+
+    with (
+        patch.object(cf.NanoleafLtpduConfigFlow, "async_set_unique_id", AsyncMock(return_value=None)) as mock_zc_id,
+        patch.object(cf.NanoleafLtpduConfigFlow, "_abort_if_unique_id_configured", lambda self, **kw: None),
+    ):
+        await zeroconf_flow.async_step_zeroconf(_FakeZeroconfInfo())
+
+    bluetooth_flow = _make_flow(hass)
+    bluetooth_flow.hass.config_entries = _FakeConfigEntries([])
+    discovery_info = _FakeServiceInfo("AA:BB:CC:DD:EE:FF", "Secretlab MAGRGB AB12")
+
+    with (
+        patch.object(cf.NanoleafLtpduConfigFlow, "async_set_unique_id", AsyncMock(return_value=None)) as mock_ble_id,
+        patch.object(cf.NanoleafLtpduConfigFlow, "_abort_if_unique_id_configured", lambda self, **kw: None),
+        patch.object(cf.NanoleafLtpduConfigFlow, "async_step_ble_pairing_code", AsyncMock(return_value={"stub": True})),
+    ):
+        await bluetooth_flow.async_step_bluetooth(discovery_info)
+
+    mock_zc_id.assert_awaited_once_with("AB12")
+    mock_ble_id.assert_awaited_once_with("AB12")
 
 
 async def test_bluetooth_discovery_aborts_when_strip_already_configured(hass: HomeAssistant) -> None:
