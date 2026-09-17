@@ -1,10 +1,7 @@
 """
-Minimal CoAP (RFC 7252) framing for talking to the strip directly — parsing (mirrored
-from magrgb/mitm/coap.py) plus a `build()` to construct fresh requests from scratch,
-which the MITM never needed (it only ever patched already-captured frames).
-
-Only what this protocol actually uses: a single Uri-Path option ("nlsecure" or
-"nlltpdu"), CON/ACK messages, GET(1)/POST(2) codes, TKL=2 tokens.
+Minimal CoAP (RFC 7252) framing for talking to the strip directly. Only what this
+protocol actually uses: a single Uri-Path option ("nlsecure" or "nlltpdu"), CON/ACK
+messages, GET(1)/POST(2) codes, TKL=2 tokens.
 """
 from __future__ import annotations
 

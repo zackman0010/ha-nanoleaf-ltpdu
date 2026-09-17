@@ -36,9 +36,8 @@ DELETE_SCENE_SCHEMA = {vol.Required("name"): str}
 
 def _coerce_int(value: Any) -> int | None:
     """tlv.describe()'s _format_value() returns a plain int for 1- or 2-byte values
-    but a "0x..." hex string for any other width — confirmed inconsistent for the same
-    logical attribute across real captures (e.g. `hu` showed up both ways). Never
-    assume a fixed byte width when reading coordinator state."""
+    but a "0x..." hex string for any other width, so never assume a fixed byte width
+    when reading coordinator state."""
     if value is None:
         return None
     if isinstance(value, int):
@@ -68,12 +67,12 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], RestoreEnt
     """One Nanoleaf LTPDU strip.
 
     `effect` is optimistic-only, not derived from coordinator data: the device's
-    active-scene state is confirmed NOT readable — full_state_query()'s response never
-    includes a `ci` path, and every `ci` write response is a fixed placeholder ack, not
-    an echo of what was loaded (see device.py). So `effect` is set on a successful
-    load_scene() call, restored across HA restarts via RestoreEntity, and cleared
-    whenever a color is set directly (matches real device behavior: setting hue/
-    saturation takes the strip out of whatever effect was running).
+    active-scene state isn't readable (full_state_query() never returns a `ci` path,
+    and `ci` write responses are a fixed ack, not an echo — see device.py). So
+    `effect` is set on a successful load_scene() call, restored across HA restarts via
+    RestoreEntity, and cleared whenever a color is set directly (matching real device
+    behavior: setting hue/saturation takes the strip out of whatever effect was
+    running).
     """
 
     _attr_has_entity_name = True
@@ -90,10 +89,7 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], RestoreEnt
         self._attr_unique_id = label_id
         self._attr_device_info = {
             "identifiers": {(DOMAIN, label_id)},
-            # entry.title already reflects the device's own discovered model name
-            # (e.g. "SecretLab MagRGB AB12", or another Nanoleaf Essentials model for
-            # a non-strip device on the same LTPDU protocol — see config_flow.py).
-            "name": entry.title,
+            "name": entry.title,  # reflects the device's own discovered model name
             "manufacturer": "Nanoleaf",
         }
         self._restored_effect: str | None = None
@@ -157,7 +153,7 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], RestoreEnt
         self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
 
-    # -- scene services (Milestone 3) ------------------------------------------------
+    # -- scene services -----------------------------------------------------------
 
     async def async_preview_scene(self, motion_style: str, motion_params: dict, colors: list[dict]) -> None:
         style_id = scene_services.resolve_motion_style(motion_style)

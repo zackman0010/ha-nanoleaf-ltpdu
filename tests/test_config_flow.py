@@ -1,11 +1,11 @@
 """
-Layer 5: config flow step sequencing, with BleProvisioner/establish_connection/HA's
+Config flow step sequencing, with BleProvisioner/establish_connection/HA's
 bluetooth+thread helpers mocked at the boundary — never a real BLE adapter or Thread
 network. Config flow instances are driven directly (constructed + `.hass` set, step
 methods called and awaited manually, including manually re-invoking a progress step a
 second time to simulate what HA's real FlowManager does once the background task
 completes) rather than through the full `hass.config_entries.flow.async_init(...)`
-machinery — confirmed this works fine for a directly-constructed flow instance (no
+machinery — this works fine for a directly-constructed flow instance (no
 `flow_id`/`handler` needed for anything this file checks). See test_coordinator.py's
 module docstring for why not the full pytest_homeassistant_custom_component fixture.
 """

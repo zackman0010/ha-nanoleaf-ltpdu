@@ -2,8 +2,7 @@
 
 Direct control of SecretLab MagRGB (and related Nanoleaf LTPDU-family) light strips
 over their real, reverse-engineered Thread/CoAP protocol — no Nanoleaf app, cloud, or
-Matter bridge involved. See project_magrgb_protocol_reverse_engineering.md for the full
-reverse-engineering history behind protocol/.
+Matter bridge involved.
 """
 from __future__ import annotations
 

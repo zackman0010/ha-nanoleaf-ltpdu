@@ -3,10 +3,6 @@ The small TLV encoding libECL uses inside decrypted /nlltpdu and /nlsecure bodie
 repeated tag(2B BE) + len(2B BE) + data(len bytes) entries. Both directions:
 `describe()`/`parse()` decode a response body into readable records; `build_set()`/
 `build_query()`/`encode()` construct request bodies to send.
-
-Tag meanings and the whole TLV shape were identified by cross-checking TTD memory
-captures against real Wireshark traffic, then independently re-confirmed by
-decompiling Nanoleaf's Android app (see project_magrgb_protocol_reverse_engineering.md).
 """
 from __future__ import annotations
 
@@ -44,11 +40,10 @@ def build_query(path: str) -> bytes:
 def full_state_query() -> bytes:
     """
     Reproduces the exact known-good batch-GET body Desktop sends on every reconnect:
-    di (bare) + oo/hu/sa/pb/ct (each with a placeholder set-value, widths as observed
-    live: oo=1 byte, hu/sa/pb/ct=2 bytes) + cm (bare). The placeholder widths are
-    replicated exactly rather than guessed, since we've never confirmed whether the
-    device cares about the width for a query — safest to match the real traffic byte
-    for byte.
+    di (bare) + oo/hu/sa/pb/ct (each with a placeholder set-value, widths as observed:
+    oo=1 byte, hu/sa/pb/ct=2 bytes) + cm (bare). The placeholder widths are replicated
+    exactly rather than guessed, since it's unconfirmed whether the device cares about
+    the width for a query — safest to match the real traffic byte for byte.
     """
     return (
         build_query("di")

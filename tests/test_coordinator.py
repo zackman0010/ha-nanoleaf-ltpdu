@@ -1,26 +1,14 @@
 """
-Real, executed tests for coordinator.py — NanoleafLtpduRuntime's lock/executor
-wrapping, the per-config-entry scene registry, and reconnect-on-failure behavior.
+Tests for coordinator.py — NanoleafLtpduRuntime's lock/executor wrapping, the
+per-config-entry scene registry, and reconnect-on-failure behavior.
 
-ENVIRONMENT NOTE: these use a bare `homeassistant.core.HomeAssistant()` instance plus
-`pytest_homeassistant_custom_component.common.MockConfigEntry` directly, NOT the
-`pytest_homeassistant_custom_component` pytest *plugin* (no `pytest_plugins =
-"pytest_homeassistant_custom_component"` anywhere in this tree). That plugin's fixture
-chain (plugins.py -> patch_time.py -> homeassistant.runner) does `import fcntl`
-unconditionally, a POSIX-only stdlib module — it cannot load on native Windows Python
-at all, which is what this dev machine runs (confirmed: WSL is installed but
-non-functional here, "insufficient system resources" starting its VM). Bare
-`HomeAssistant()` + `MockConfigEntry` both import and run fine on Windows (confirmed
-directly), so this file gets REAL execution instead of being written speculatively —
-just without the full HA test harness's entity-registry/state-machine conveniences.
-Layer 3 (light.py) tests take the same approach; see tests/test_light.py.
-
-If/when this runs somewhere with a working `fcntl` (CI on Linux, WSL once it has
-enough resources to start, the eventual HAOS deployment), the *standard*
-`pytest_homeassistant_custom_component` `hass` fixture would also work here and is the
-more idiomatic long-term choice — this file's manual approach is a deliberate,
-documented workaround for a real environment constraint, not a recommendation to avoid
-the standard fixture in general.
+Uses a bare `homeassistant.core.HomeAssistant()` instance plus
+`pytest_homeassistant_custom_component.common.MockConfigEntry` directly, not the
+`pytest_homeassistant_custom_component` pytest plugin — that plugin's fixture chain
+does `import fcntl` unconditionally, a POSIX-only stdlib module unavailable on native
+Windows. Bare `HomeAssistant()` + `MockConfigEntry` both work cross-platform, just
+without the full HA test harness's entity-registry/state-machine conveniences.
+tests/test_light.py takes the same approach.
 """
 from __future__ import annotations
 

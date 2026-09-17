@@ -1,13 +1,12 @@
 """
-Standalone LTPDU control client — talks directly to the MAGRGB strip over CoAP/Thread
-using the fully reverse-engineered X25519+AES-CTR session protocol. No Nanoleaf
-Desktop, no debugger, no MITM required for this part — this IS the real client.
+LTPDU control client — talks directly to the MAGRGB strip over CoAP/Thread using the
+reverse-engineered X25519+AES-CTR session protocol. No Nanoleaf Desktop, no debugger,
+no MITM required — this IS the real client.
 
-Vendored from magrgb/server/device.py (relative imports only — no protocol/logic
-changes). The HA integration never calls this directly from the event loop: see
-coordinator.py's NanoleafLtpduRuntime, which wraps every call in
-hass.async_add_executor_job() behind an asyncio.Lock (this class does blocking
-synchronous socket I/O and is not safe to call concurrently against one instance).
+The HA integration never calls this directly from the event loop: see coordinator.py's
+NanoleafLtpduRuntime, which wraps every call in hass.async_add_executor_job() behind an
+asyncio.Lock (this class does blocking synchronous socket I/O and is not safe to call
+concurrently against one instance).
 """
 from __future__ import annotations
 
@@ -99,15 +98,14 @@ class Device:
         return self._ltpdu(tlv.build_set(path, value))
 
     def get_state(self) -> list[dict]:
-        """MUST be sent as CoAP GET, not POST — real captures confirm the device only
-        treats the embedded [path,set] entries in this batch pattern as inert
-        placeholders under GET (returning real current values); the identical bytes
-        sent as POST are applied as real writes (e.g. zeroing oo/hu/sa/pb/ct), which is
-        what full_state_query()'s placeholder-zero values do if ever sent this way —
-        confirmed live, the hard way, session 5."""
+        """MUST be sent as CoAP GET, not POST: the device treats the embedded
+        [path,set] entries in this batch pattern as inert placeholders under GET
+        (returning real current values), but applies the identical bytes as real
+        writes under POST — e.g. zeroing oo/hu/sa/pb/ct, since that's what
+        full_state_query()'s placeholder-zero values would become."""
         return self._ltpdu(tlv.full_state_query(), code=coap.CODE_GET)
 
-    # -- convenience wrappers, all confirmed live in session 3-4 -------------------
+    # -- convenience wrappers --------------------------------------------------
 
     def set_power(self, on: bool) -> None:
         self.set("lb/0/oo", bytes([1 if on else 0]))
@@ -137,8 +135,8 @@ class Device:
 
     # -- scenes/effects (ci opcode family) ------------------------------------------
 
-    # NOTE: ci opcode bytes always travel as the VALUE of an outer [path="ci", set]
-    # TLV pair, not raw on their own — confirmed from every live-captured ci write.
+    # ci opcode bytes always travel as the VALUE of an outer [path="ci", set] TLV pair,
+    # not raw on their own.
 
     def preview_scene(self, style_id: int, params: bytes, colors: list[tuple[int, int, int]]) -> None:
         self._ltpdu(tlv.build_set("ci", ci.build_write(style_id, params, colors)))

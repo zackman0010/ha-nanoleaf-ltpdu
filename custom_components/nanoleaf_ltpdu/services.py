@@ -1,15 +1,13 @@
 """
 Scene service support — the encoding logic a future custom Lovelace scene-editor card
 would drive, plus the domain-level `get_scene_capabilities` service that hands it the
-motion styles/param field order/ranges directly from ci.py's own confirmed constants,
-so a card never needs to hardcode or reverse-engineer them separately.
+motion styles/param field order/ranges directly from ci.py's own constants, so a card
+never needs to hardcode or reverse-engineer them separately.
 
-Deliberately NOT inventing a "friendly units" layer on top of the raw confirmed byte
-ranges (e.g. un-inverting Speed, or rescaling anything to 0-100) — that would be
-presenting an unvalidated UX guess as settled protocol knowledge. Every field here
-takes the actual raw byte value ci.py documents, in the actual field order ci.py
-documents. A future card is exactly the right place to add a friendlier UI on top of
-this honest, direct mapping.
+Deliberately NOT inventing a "friendly units" layer on top of the raw byte ranges
+(e.g. un-inverting Speed, or rescaling anything to 0-100) — every field here takes the
+actual raw byte value and field order ci.py documents. A future card is the right
+place to add a friendlier UI on top of this direct mapping.
 """
 from __future__ import annotations
 
@@ -29,7 +27,7 @@ MOTION_PARAM_FIELDS: dict[int, list[str]] = {
     0x06: ["speed", "direction", "segment"],  # Stripes
 }
 
-# Confirmed ranges (ci.py) — Speed is INVERTED: 0x01=fastest, 0x58(88)=slowest.
+# Ranges (ci.py) — Speed is INVERTED: 0x01=fastest, 0x58(88)=slowest.
 FIELD_RANGES: dict[str, tuple[int, int]] = {
     "speed": (0x01, 0x58),
     "delay": (0x00, 0x58),
@@ -58,8 +56,8 @@ SCENE_FIELDS_SCHEMA = {
 
 class SceneEncodingError(vol.Invalid):
     """A motion_style/motion_params/colors combination that doesn't match ci.py's
-    confirmed shape — distinguished from a generic vol.Invalid so callers can tell
-    "your service call was malformed" apart from other validation failures."""
+    shape — distinguished from a generic vol.Invalid so callers can tell "your service
+    call was malformed" apart from other validation failures."""
 
 
 def resolve_motion_style(motion_style: str) -> int:

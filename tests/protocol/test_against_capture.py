@@ -1,22 +1,9 @@
 """
-Offline validation of the vendored protocol package's *request-building* functions
-against real bytes captured live during the standalone toolkit's development (see
-magrgb/mitm/mitm_capture.jsonl). No hardware, no HA test harness, no network needed —
-this checks that what we'd transmit matches byte-for-byte what Desktop/the app is known
-to have actually sent, and — for device.py — that the CoAP method (GET vs POST) is
-correct for each call, since sending the wrong one silently applies writes that should
-have been read-only (see the "FOUND AND FIXED" section of the project's
-project_magrgb_protocol_reverse_engineering.md memory: this exact bug turned real
-hardware off twice before it was caught).
-
-Ported from magrgb/server/test_against_capture.py — every original assertion is
-unchanged, only the import paths differ (this now imports the vendored copies under
-custom_components/nanoleaf_ltpdu/protocol/, not the standalone server/ modules), plus
-one new check for thread_credentials.py's from_operational_dataset_tlv() classmethod.
-
-Run: pytest ha_integration/tests/protocol/test_against_capture.py
-(or `python -m ha_integration.tests.protocol.test_against_capture` from the repo root,
-mirroring the standalone script's own __main__ entry point)
+Offline validation of the protocol package's *request-building* functions against real
+captured bytes. No hardware, no HA test harness, no network needed — this checks that
+what we'd transmit matches byte-for-byte what's known to have actually been sent, and
+— for device.py — that the CoAP method (GET vs POST) is correct for each call, since
+sending the wrong one silently applies writes that should have been read-only.
 """
 from __future__ import annotations
 
@@ -102,11 +89,9 @@ def test_coap_build_and_round_trip() -> None:
 
 def test_device_get_state_uses_coap_get_and_set_uses_post() -> None:
     # -- device.py: get_state() MUST use CoAP GET, everything else MUST use POST --
-    # (regression test for the session-5 bug: real captures show Desktop sends the
-    # di+lb/0/*(set,0)+cm "full state query" as GET; sending it as POST makes the
-    # firmware actually apply the embedded placeholder-zero SETs as real writes,
-    # silently zeroing oo/hu/sa/pb — this turned the light off on real hardware twice
-    # before it was caught. See project memory, "FOUND AND FIXED" section.)
+    # (regression test: sending the "full state query" as POST instead of GET makes
+    # the firmware apply the embedded placeholder-zero SETs as real writes, silently
+    # zeroing oo/hu/sa/pb.)
     class _FakeSession:
         def process(self, data: bytes) -> bytes:
             return data
@@ -136,17 +121,13 @@ def test_device_get_state_uses_coap_get_and_set_uses_post() -> None:
 
 def test_thread_credentials_pan_id_byte_order_matches_between_both_constructors() -> None:
     """
-    New for the HA integration (Milestone 1): thread_credentials.py gained a second
-    constructor, from_operational_dataset_tlv(), that parses HA's own active Thread
-    dataset (a MeshCoP TLV hex string, via python_otbr_api) instead of discrete
-    `ot-ctl dataset active` field values. build_thread_credentials_tlv() applies its
-    OWN PAN-ID byte swap internally — from_operational_dataset_tlv() must hand it the
-    RAW, unswapped PAN ID bytes from the parsed dataset, exactly like
-    from_ot_ctl_dataset() already does. Pre-swapping in the new constructor would
-    double-swap and produce a network the strip silently never joins, with no error
-    anywhere in the chain — this is exactly the kind of bug that only shows up as "the
-    strip just doesn't show up on the mesh," hours after the fact. This test builds the
-    same logical network both ways and asserts byte-identical output.
+    thread_credentials.py has two constructors: from_ot_ctl_dataset() (discrete field
+    values) and from_operational_dataset_tlv() (HA's own active Thread dataset, a
+    MeshCoP TLV hex string via python_otbr_api). build_thread_credentials_tlv() applies
+    its OWN PAN-ID byte swap internally, so both constructors must hand it the RAW,
+    unswapped PAN ID bytes — pre-swapping in either would double-swap and produce a
+    network the strip silently never joins, with no error anywhere in the chain. This
+    test builds the same logical network both ways and asserts byte-identical output.
 
     Values below are a synthetic, made-up Thread dataset — the test only checks that
     both constructors agree on PAN-ID byte order for the same logical network, which

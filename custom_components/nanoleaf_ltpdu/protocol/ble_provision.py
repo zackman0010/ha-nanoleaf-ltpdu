@@ -1,30 +1,25 @@
 """
 BLE provisioning client — pairs with a fresh/factory-reset strip over Bluetooth LE and
-retrieves its auth token, using the proprietary LTPDU-over-BLE scheme (NOT Apple
+retrieves its auth token, using the proprietary LTPDU-over-BLE scheme (not Apple
 HomeKit/HAP — the strip supports both, but only this route yields the Nanoleaf auth
-token; see project memory). Reverse-engineered from Nanoleaf's own Android app
-(homekitclient.networking.bluetooth.b) — see
-project_magrgb_protocol_reverse_engineering.md, "BLE provisioning".
+token).
 
-Vendored from magrgb/server/ble_provision.py, with one change: BleProvisioner accepts
-an optional, already-connected `client`. The config flow must never let this module
-open its own parallel BleakClient — Home Assistant's `bluetooth` integration owns and
-arbitrates the adapter for every integration, and a second independent connection
-attempt would race/conflict with it. The config flow instead obtains a BLEDevice via
-`bluetooth.async_ble_device_from_address()` and connects it via
-`bleak_retry_connector.establish_connection()` (HA's blessed replacement for bare
-`BleakClient(...).connect()`), then hands the resulting client in here. When no client
-is injected, this falls back to opening its own (only used by the standalone
-magrgb/server/ CLI tools this was vendored from — never inside HA).
+BleProvisioner accepts an optional, already-connected `client`. The config flow must
+never let this module open its own parallel BleakClient — Home Assistant's
+`bluetooth` integration owns and arbitrates the adapter for every integration, and a
+second independent connection attempt would race/conflict with it. The config flow
+instead obtains a BLEDevice via `bluetooth.async_ble_device_from_address()` and
+connects it via `bleak_retry_connector.establish_connection()` (HA's blessed
+replacement for bare `BleakClient(...).connect()`), then hands the resulting client in
+here. When no client is injected, this falls back to opening its own (only used by
+standalone CLI tooling outside HA).
 
-STATUS: pair() confirmed working live (session 5) — see project memory. Only the
-one-time pairing/auth-token exchange over CHARACTERISTIC_ENCRYPTION_SETUP uses the
-1-byte-tag/1-byte-len p218lg.a framing (_ble_tlv_encode below); ongoing commands over
-CHARACTERISTIC_ENCRYPTED — including write_thread_credentials() — are wrapped in a
-full synthetic CoAP frame (coap.build(), uri_path="nlltpdu") containing a 2-byte-tag
-LTPDU [path,set] command (tlv.build_set(), same framing real /nlsecure UDP CoAP uses),
-THEN AES-CTR encrypted as one blob — confirmed from LTPDURequest.toByteArrayWrappedInCoap()
-and Endpoints.java's `ThreadControl("th/tc")` entry (decompiled, session 5).
+Only the one-time pairing/auth-token exchange over CHARACTERISTIC_ENCRYPTION_SETUP
+uses the 1-byte-tag/1-byte-length framing (_ble_tlv_encode below); ongoing commands
+over CHARACTERISTIC_ENCRYPTED — including write_thread_credentials() — are wrapped in
+a full synthetic CoAP frame (coap.build(), uri_path="nlltpdu") containing a 2-byte-tag
+LTPDU [path,set] command (tlv.build_set(), the same framing real UDP/CoAP traffic
+uses), then AES-CTR encrypted as one blob.
 
 Requires: pip install bleak
 """
@@ -53,14 +48,12 @@ NO_MORE_PAIRINGS_SENTINEL = b"\x86"
 
 
 def _ble_tlv_encode(tag: int, value: bytes) -> bytes:
-    """
-    Setup-phase-only TLV framing (p218lg.a.tlvArrayToByteArray, decompiled): 1-byte tag
-    + 1-byte length + value. Only used for the pairing/auth-token exchange over
-    CHARACTERISTIC_ENCRYPTION_SETUP — ongoing commands over CHARACTERISTIC_ENCRYPTED
-    use the CoAP-wrapped 2-byte tag/2-byte length framing from tlv.py instead (see
-    write_thread_credentials). Sending the wrong one for the setup exchange is what
-    produced GATT status 131 (CanNotDecryptException per NLBluetoothException) on real
-    hardware — confirmed by decompiling and reading the real encoder.
+    """Setup-phase-only TLV framing: 1-byte tag + 1-byte length + value. Only used for
+    the pairing/auth-token exchange over CHARACTERISTIC_ENCRYPTION_SETUP — ongoing
+    commands over CHARACTERISTIC_ENCRYPTED use the CoAP-wrapped 2-byte tag/2-byte
+    length framing from tlv.py instead (see write_thread_credentials). Sending the
+    wrong one for the setup exchange produces GATT status 131
+    (CanNotDecryptException) on real hardware.
     """
     if len(value) > 255:
         raise ValueError("BLE TLV values over 255 bytes need the real encoder's chunking loop")
@@ -113,11 +106,10 @@ class BleProvisioner:
         self.session = crypto.SessionCrypto(key, iv)
 
         # 2. through the now-encrypted channel: present EITHER the pairing code OR a
-        #    cached token, never both — encryptAuthenticationToken() (decompiled) sends
-        #    exactly one TLV, picking PUBLIC_KEY(pairing code) when one was given and
-        #    falling back to SALT(cached token) only when it wasn't. Sending both
-        #    concatenated (the previous bug here) left the peripheral unable to parse
-        #    the decrypted body, surfaced as GATT 131 / CanNotDecryptException.
+        #    cached token, never both — exactly one TLV, PUBLIC_KEY(pairing code) when
+        #    one was given, else SALT(cached token). Sending both concatenated leaves
+        #    the peripheral unable to parse the decrypted body (GATT 131 /
+        #    CanNotDecryptException).
         if self.pairing_code:
             plaintext = _ble_tlv_encode(TAG_PUBLIC_KEY, self.pairing_code.encode("ascii"))
         else:
@@ -135,19 +127,16 @@ class BleProvisioner:
         return resp_plain
 
     async def write_thread_credentials(self, creds: ThreadCredentials) -> coap.CoapMessage:
-        """
-        Sends the Thread-credential TLV to LTPDU endpoint `th/tc` over
+        """Sends the Thread-credential TLV to LTPDU endpoint `th/tc` over
         CHARACTERISTIC_ENCRYPTED, using the already-established session from pair().
 
-        CONFIRMED against decompiled source (session 5), via LTPDURequest.toByteArray()
-        -> toByteArrayWrappedInCoap() (p181jg/h.java): for a non-"isV2" BLE connection
-        (our device), every ongoing command — not just this one — is a full synthetic
-        CoAP frame (coap.build(), uri_path="nlltpdu") whose payload is the ordinary
-        2-byte-tag [path,set] LTPDU command (tlv.build_set(), the exact same shape real
-        UDP/CoAP `/nlltpdu` traffic uses), with the *entire* CoAP-framed blob then
-        AES-CTR encrypted as one unit before being written to the characteristic — since
-        BLE has no separate transport-level CoAP framing the way UDP does. The response
-        read back off the same characteristic is symmetrically CoAP-framed too.
+        Every ongoing command, not just this one, is a full synthetic CoAP frame
+        (coap.build(), uri_path="nlltpdu") whose payload is the ordinary 2-byte-tag
+        [path,set] LTPDU command (tlv.build_set(), the same shape real UDP/CoAP
+        traffic uses), with the entire CoAP-framed blob then AES-CTR encrypted as one
+        unit before being written to the characteristic — BLE has no separate
+        transport-level CoAP framing the way UDP does. The response read back off the
+        same characteristic is symmetrically CoAP-framed.
         """
         if self.session is None:
             raise BleProvisionError("call pair() first")
