@@ -6,3 +6,7 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+
+# frontend/ build tooling — the *output* (custom_components/.../www/*.js) is
+# committed since HACS users never run npm; the toolchain and its deps are not.
+frontend/node_modules/
