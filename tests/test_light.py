@@ -1,14 +1,14 @@
 """
 Tests for light.py — brightness/color/effect property parsing, the brightness-floor
-edge case, effect restore-on-startup, and effect clearing when a color is set directly.
+edge case, and the live-derived `effect` property (resolved from the coordinator's
+polled current_scene_id, not optimistic tracking — see light.py's class docstring).
 
 Constructed manually (fake coordinator + fake ConfigEntry, no real entity-platform
-registration, `async_write_ha_state`/`async_get_last_state` monkeypatched per-instance)
-rather than via the full `pytest_homeassistant_custom_component` `hass`/entity-platform
-fixtures — see tests/test_coordinator.py's module docstring for why. This doesn't skip
-anything load-bearing: CoordinatorEntity's and RestoreEntity's async_added_to_hass()
-don't touch `self.hass` at all, only `self.coordinator.async_add_listener(...)` and
-`self.async_get_last_state()`, both faked explicitly here.
+registration, `async_write_ha_state` monkeypatched per-instance) rather than via the
+full `pytest_homeassistant_custom_component` `hass`/entity-platform fixtures — see
+tests/test_coordinator.py's module docstring for why. This doesn't skip anything
+load-bearing: CoordinatorEntity's async_added_to_hass() doesn't touch `self.hass` at
+all, only `self.coordinator.async_add_listener(...)`, faked explicitly here.
 """
 from __future__ import annotations
 
@@ -16,15 +16,17 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.light import ATTR_BRIGHTNESS, ATTR_EFFECT, ATTR_HS_COLOR
-from homeassistant.core import State
 
 from custom_components.nanoleaf_ltpdu.const import CONF_AUTH_TOKEN, CONF_HOST, CONF_LABEL_ID, DOMAIN
 from custom_components.nanoleaf_ltpdu.light import NanoleafLtpduLight, _coerce_int, _model_from_title
+from custom_components.nanoleaf_ltpdu.protocol import ci
 
 
 class _FakeRuntime:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple]] = []
+        self.scene_ids: list[int] = []
+        self.scene_defs: dict[int, tuple[int, bytes, list[tuple[int, int, int]]]] = {}
 
     async def set_power(self, on: bool) -> None:
         self.calls.append(("set_power", (on,)))
@@ -35,10 +37,21 @@ class _FakeRuntime:
     async def load_scene(self, scene_id: int) -> None:
         self.calls.append(("load_scene", (scene_id,)))
 
+    async def list_scenes(self) -> list[int]:
+        return self.scene_ids
+
+    async def get_scene(self, scene_id: int) -> tuple[int, bytes, list[tuple[int, int, int]]]:
+        return self.scene_defs[scene_id]
+
 
 class _FakeCoordinator:
-    def __init__(self, records: list[dict], scenes: dict[str, int] | None = None) -> None:
-        self.data = {"records": records}
+    def __init__(
+        self,
+        records: list[dict],
+        scenes: dict[str, int] | None = None,
+        current_scene_id: int | None = None,
+    ) -> None:
+        self.data = {"records": records, "current_scene_id": current_scene_id}
         self.scenes = scenes or {"Northern Lights": 0xFA}
         self.runtime = _FakeRuntime()
         self.refresh_calls = 0
@@ -50,9 +63,13 @@ class _FakeCoordinator:
         self.refresh_calls += 1
 
 
-def _make_light(records: list[dict], scenes: dict[str, int] | None = None) -> NanoleafLtpduLight:
+def _make_light(
+    records: list[dict],
+    scenes: dict[str, int] | None = None,
+    current_scene_id: int | None = None,
+) -> NanoleafLtpduLight:
     entry = MockConfigEntry(domain=DOMAIN, unique_id="AB12", data={CONF_LABEL_ID: "AB12", CONF_HOST: "::1", CONF_AUTH_TOKEN: "00"})
-    coordinator = _FakeCoordinator(records, scenes)
+    coordinator = _FakeCoordinator(records, scenes, current_scene_id)
     light = NanoleafLtpduLight(coordinator, entry)  # type: ignore[arg-type]
     light.async_write_ha_state = lambda: None  # type: ignore[method-assign] — no real hass to write to
     return light
@@ -99,6 +116,37 @@ def test_brightness_zero_percent_maps_to_zero_not_one() -> None:
 def test_effect_list_reflects_coordinator_scenes() -> None:
     light = _make_light([], scenes={"Northern Lights": 0xFA, "Sunset": 1, "Ocean": 2})
     assert light.effect_list == ["Northern Lights", "Sunset", "Ocean"]
+
+
+# -- effect: live-derived from the coordinator's polled current_scene_id, not
+# optimistic tracking (see light.py's class docstring for why this changed) --------
+
+def test_effect_resolves_known_scene_id_to_its_name() -> None:
+    light = _make_light([], scenes={"Northern Lights": 0xFA, "Sunset": 1}, current_scene_id=1)
+    assert light.effect == "Sunset"
+
+
+def test_effect_falls_back_to_generic_label_for_unregistered_scene_id() -> None:
+    """A scene ID the strip is running that isn't in this entry's name registry —
+    an unnamed factory preset, or one saved by another client — still surfaces as
+    something informative rather than silently vanishing to None."""
+    light = _make_light([], scenes={"Northern Lights": 0xFA}, current_scene_id=0xFB)
+    assert light.effect == "Scene 251"
+
+
+def test_effect_is_none_when_no_scene_is_playing() -> None:
+    light = _make_light([], current_scene_id=ci.NO_SCENE_MARKER)
+    assert light.effect is None
+
+
+def test_effect_is_none_during_a_live_unsaved_preview() -> None:
+    light = _make_light([], current_scene_id=ci.PREVIEW_MARKER)
+    assert light.effect is None
+
+
+def test_effect_is_none_when_current_scene_id_not_yet_polled() -> None:
+    light = _make_light([])  # current_scene_id defaults to None
+    assert light.effect is None
 
 
 # -- DeviceInfo population from the `di` record (Device Info page: model/serial/versions) --
@@ -170,18 +218,15 @@ async def test_turn_on_brightness_rounding_never_maps_low_values_to_zero(ha_brig
     assert got_pct >= 1
 
 
-async def test_turn_on_with_effect_loads_scene_and_sets_optimistic_effect() -> None:
+async def test_turn_on_with_effect_loads_scene() -> None:
     light = _make_light([], scenes={"Northern Lights": 0xFA, "Sunset": 7})
     await light.async_turn_on(**{ATTR_EFFECT: "Sunset"})
     assert light.coordinator.runtime.calls == [("load_scene", (7,))]
-    assert light.effect == "Sunset"
 
 
-async def test_turn_on_with_color_clears_optimistic_effect() -> None:
+async def test_turn_on_with_color_calls_set_color() -> None:
     light = _make_light([{"path": "lb/0/pb", "op": "current", "value": 50}])
-    light._restored_effect = "Sunset"  # simulate an effect having been active
     await light.async_turn_on(**{ATTR_HS_COLOR: (120.0, 80.0)})
-    assert light.effect is None
     assert light.coordinator.runtime.calls == [("set_color", (120, 80, None))]
 
 
@@ -197,26 +242,27 @@ async def test_turn_off_calls_set_power_false() -> None:
     assert light.coordinator.runtime.calls == [("set_power", (False,))]
 
 
-# -- effect restore across HA restarts (RestoreEntity), without touching real hass ----
+# -- list_device_scenes: reads directly off the device (ci ListScene + GetScene),
+# not the local name registry -----------------------------------------------------
 
-async def test_added_to_hass_restores_effect_from_last_state() -> None:
-    light = _make_light([])
+async def test_list_device_scenes_reads_from_device_and_resolves_known_names() -> None:
+    light = _make_light([], scenes={"Northern Lights": 0xFA, "Sunset": 1}, current_scene_id=1)
+    light.coordinator.runtime.scene_ids = [0xFA, 1, 0xFB]
+    light.coordinator.runtime.scene_defs = {
+        0xFA: (0x06, bytes.fromhex("140014"), [(227, 100, 100)]),
+        1: (0x01, bytes.fromhex("0e0001"), [(0, 96, 73)]),
+        0xFB: (0x01, bytes.fromhex("0e0001"), [(1, 96, 73)]),
+    }
 
-    async def fake_last_state():
-        return State("light.secretlab_magrgb_3zp3", "on", {ATTR_EFFECT: "Sunset"})
+    response = await light.async_list_device_scenes()
 
-    light.async_get_last_state = fake_last_state  # type: ignore[method-assign]
-    assert light.effect is None
-    await light.async_added_to_hass()
-    assert light.effect == "Sunset"
-
-
-async def test_added_to_hass_with_no_previous_state_leaves_effect_none() -> None:
-    light = _make_light([])
-
-    async def fake_last_state():
-        return None
-
-    light.async_get_last_state = fake_last_state  # type: ignore[method-assign]
-    await light.async_added_to_hass()
-    assert light.effect is None
+    assert response["current_scene_id"] == 1
+    scenes = response["scenes"]
+    assert scenes["250"]["name"] == "Northern Lights"
+    assert scenes["250"]["motion_style"] == "stripes"
+    assert scenes["250"]["motion_params"] == {"speed": 0x14, "direction": 0x00, "segment": 0x14}
+    assert scenes["250"]["colors"] == [{"hue": 227, "saturation": 100, "brightness": 100}]
+    assert scenes["1"]["name"] == "Sunset"
+    # An unregistered scene ID (e.g. saved by another client) still comes back, just
+    # with no resolved name.
+    assert scenes["251"]["name"] is None

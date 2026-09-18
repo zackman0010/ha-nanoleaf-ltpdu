@@ -65,6 +65,41 @@ def test_ci_scene_opcodes() -> None:
     )
 
 
+def test_ci_scene_read_opcodes() -> None:
+    # -- ci.py: build_list/build_get/build_delete/build_current request encoding,
+    #    and decode_current/decode_list/decode_get response decoding, all against
+    #    real bytes captured live against hardware this session (device N24250K0A48
+    #    / label "3ZP3") --
+    check("ci list (bare query)", tlv.build_set("ci", ci.build_list()), "0001000263690002000407030000")
+    check("ci get (scene id 0xfa)", tlv.build_set("ci", ci.build_get(0xFA)), "0001000263690002000507040001fa")
+    check("ci delete (scene id 0x01)", tlv.build_set("ci", ci.build_delete(0x01)), "000100026369000200050705000101")
+    check("ci current (bare query)", tlv.build_set("ci", ci.build_current()), "0001000263690002000407070000")
+
+    if ci.decode_current(bytes.fromhex("0087070001fa")) != 0xFA:
+        fail("decode_current: saved scene 0xfa active")
+    if ci.decode_current(bytes.fromhex("008707000100")) != ci.NO_SCENE_MARKER:
+        fail("decode_current: static color (no scene) should decode to NO_SCENE_MARKER")
+    if ci.decode_current(bytes.fromhex("0087070001ff")) != ci.PREVIEW_MARKER:
+        fail("decode_current: live preview should decode to PREVIEW_MARKER")
+    print("ci.decode_current: OK")
+
+    if ci.decode_list(bytes.fromhex("0087030006fafbfcfdfe01")) != [0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0x01]:
+        fail("decode_list: scene ID enumeration mismatch")
+    print("ci.decode_list: OK")
+
+    # Northern Lights (id 0xfa), read back live via GetScene -- independently known
+    # real palette (227/182/125/62/31/2/307 degrees, all sat=100/bright=100)
+    # confirms the bit-packed hue<<14|sat<<7|bright color decoding, not just the
+    # header framing.
+    style_id, params, colors = ci.decode_get(
+        bytes.fromhex("008704001f0105fa0614001402160738f2642db2641f72640fb26407f26400b2644cf264")
+    )
+    expected_colors = [(227, 100, 100), (182, 100, 100), (125, 100, 100), (62, 100, 100), (31, 100, 100), (2, 100, 100), (307, 100, 100)]
+    if (style_id, params, colors) != (0x06, bytes.fromhex("140014"), expected_colors):
+        fail(f"decode_get: Northern Lights mismatch, got {(hex(style_id), params.hex(), colors)}")
+    print("ci.decode_get: OK")
+
+
 def test_coap_build_and_round_trip() -> None:
     # -- coap.py: build() must reproduce a real captured frame's header+options exactly,
     #    given the same message_id/token/payload (successful_capture.pcapng packet 24) --
@@ -191,6 +226,7 @@ def test_thread_credentials_pan_id_byte_order_matches_between_both_constructors(
 def main() -> None:
     test_tlv_attribute_sets()
     test_ci_scene_opcodes()
+    test_ci_scene_read_opcodes()
     test_coap_build_and_round_trip()
     test_device_get_state_uses_coap_get_and_set_uses_post()
     test_thread_credentials_pan_id_byte_order_matches_between_both_constructors()

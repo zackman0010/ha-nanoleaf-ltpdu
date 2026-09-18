@@ -85,6 +85,16 @@ def encode_colors(colors: list[dict[str, int]]) -> list[tuple[int, int, int]]:
     return [(c["hue"], c["saturation"], c["brightness"]) for c in colors]
 
 
+def decode_motion_params(style_id: int, params: bytes) -> dict[str, int]:
+    """Inverse of encode_motion_params() — turns ci.decode_get()'s raw param bytes
+    back into the named fields a preview_scene/save_scene call would take."""
+    return dict(zip(MOTION_PARAM_FIELDS[style_id], params))
+
+
+def decode_colors(colors: list[tuple[int, int, int]]) -> list[dict[str, int]]:
+    return [{"hue": h, "saturation": s, "brightness": b} for h, s, b in colors]
+
+
 def get_scene_capabilities() -> dict[str, Any]:
     """Serialized straight from ci.py's own constants — see this module's docstring
     for why no unit conversion happens here."""

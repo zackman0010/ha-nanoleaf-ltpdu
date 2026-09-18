@@ -76,6 +76,18 @@ class NanoleafLtpduRuntime:
     async def load_scene(self, scene_id: int) -> None:
         await self._call(self._device.load_scene, scene_id)
 
+    async def list_scenes(self) -> list[int]:
+        return await self._call(self._device.list_scenes)
+
+    async def get_scene(self, scene_id: int) -> tuple[int, bytes, list[tuple[int, int, int]]]:
+        return await self._call(self._device.get_scene, scene_id)
+
+    async def delete_scene(self, scene_id: int) -> None:
+        await self._call(self._device.delete_scene, scene_id)
+
+    async def get_current_scene(self) -> int:
+        return await self._call(self._device.get_current_scene)
+
     def close(self) -> None:
         self._device.close()
 
@@ -126,10 +138,15 @@ class NanoleafLtpduCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return scene_id
 
     async def async_delete_scene(self, name: str) -> None:
+        """Deletes both the on-device scene data (ci's DeleteScene sub-command) and
+        this entry's name->id registry mapping. Device-side delete happens first: if
+        it fails, the registry mapping is left intact rather than forgetting a name
+        for a scene ID that's actually still on the strip."""
         if name in RESERVED_SCENE_NAMES.values():
             raise ValueError(f"'{name}' is a reserved factory scene and cannot be deleted")
         scenes = self._scene_registry_data["scenes"]
         if name in scenes:
+            await self.runtime.delete_scene(scenes[name])
             del scenes[name]
             await self._scene_store.async_save(self._scene_registry_data)
             self.scenes.pop(name, None)
@@ -145,10 +162,11 @@ class NanoleafLtpduCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             await self._async_ensure_connected()
             records = await self.runtime.get_state()
+            current_scene_id = await self.runtime.get_current_scene()
         except (OSError, protocol_device.DeviceError) as err:
             # Force a fresh handshake next cycle instead of wedging permanently — the
             # strip's session dies on reboot, a Thread topology change, or an HA
             # restart, and DataUpdateCoordinator's own retry/backoff will call us again.
             self._connected = False
             raise UpdateFailed(str(err)) from err
-        return {"records": records}
+        return {"records": records, "current_scene_id": current_scene_id}

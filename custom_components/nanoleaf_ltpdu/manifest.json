@@ -9,7 +9,7 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/zackman0010/ha-nanoleaf-ltpdu/issues",
   "requirements": ["pycryptodomex>=3.20.0", "bleak-retry-connector>=3.5.0"],
-  "version": "0.1.11",
+  "version": "0.1.12",
   "zeroconf": ["_ltpdu._udp.local."],
   "bluetooth": [
     {

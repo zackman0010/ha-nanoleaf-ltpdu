@@ -60,3 +60,10 @@ delete_scene:
       required: true
       selector:
         text: {}
+
+list_device_scenes:
+  target:
+    entity:
+      domain: light
+      integration: nanoleaf_ltpdu
+  fields: {}

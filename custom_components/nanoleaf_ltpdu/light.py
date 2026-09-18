@@ -17,18 +17,19 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceResponse, SupportsResponse
 from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import services as scene_services
 from .const import CONF_LABEL_ID, DOMAIN, SCENE_LIBRARY_KEY
 from .coordinator import NanoleafLtpduCoordinator
+from .protocol import ci
 from .protocol import device as protocol_device
 from .protocol import tlv
 
 SERVICE_PREVIEW_SCENE = "preview_scene"
 SERVICE_SAVE_SCENE = "save_scene"
 SERVICE_DELETE_SCENE = "delete_scene"
+SERVICE_LIST_DEVICE_SCENES = "list_device_scenes"
 
 PREVIEW_SCENE_SCHEMA = scene_services.SCENE_FIELDS_SCHEMA
 SAVE_SCENE_SCHEMA = {vol.Required("name"): str, **scene_services.SCENE_FIELDS_SCHEMA}
@@ -95,18 +96,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     platform.async_register_entity_service(
         SERVICE_DELETE_SCENE, DELETE_SCENE_SCHEMA, "async_delete_scene"
     )
+    platform.async_register_entity_service(
+        SERVICE_LIST_DEVICE_SCENES, {}, "async_list_device_scenes", supports_response=SupportsResponse.ONLY
+    )
 
 
-class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], RestoreEntity, LightEntity):
+class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], LightEntity):
     """One Nanoleaf LTPDU strip.
 
-    `effect` is optimistic-only, not derived from coordinator data: the device's
-    active-scene state isn't readable (full_state_query() never returns a `ci` path,
-    and `ci` write responses are a fixed ack, not an echo — see device.py). So
-    `effect` is set on a successful load_scene() call, restored across HA restarts via
-    RestoreEntity, and cleared whenever a color is set directly (matching real device
-    behavior: setting hue/saturation takes the strip out of whatever effect was
-    running).
+    `effect` reflects the strip's real current-scene state, read live every poll via
+    ci's CurrentEffect sub-command (protocol/ci.py's decode_current, folded into
+    coordinator.py's _async_update_data as "current_scene_id") — genuinely accurate,
+    including changes made from the physical remote or another client, not just
+    optimistic tracking of what HA itself last did. A running scene ID is resolved to
+    a name via the coordinator's per-entry registry when known; an unregistered ID
+    (e.g. an unnamed factory preset, or a scene saved by another client) falls back to
+    a generic "Scene <id>" label. No scene playing (static color/off) or an unsaved
+    live preview both report `effect=None`, since neither is a name in `effect_list`.
     """
 
     _attr_has_entity_name = True
@@ -128,13 +134,6 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], RestoreEnt
             "model": _model_from_title(entry.title, label_id),
             **_device_identity_info(coordinator.data["records"]),
         }
-        self._restored_effect: str | None = None
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        last_state = await self.async_get_last_state()
-        if last_state is not None:
-            self._restored_effect = last_state.attributes.get(ATTR_EFFECT)
 
     def _records(self) -> list[dict]:
         return self.coordinator.data["records"]
@@ -164,13 +163,18 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], RestoreEnt
 
     @property
     def effect(self) -> str | None:
-        return self._restored_effect
+        scene_id = self.coordinator.data.get("current_scene_id")
+        if scene_id in (None, ci.NO_SCENE_MARKER, ci.PREVIEW_MARKER):
+            return None
+        for name, sid in self.coordinator.scenes.items():
+            if sid == scene_id:
+                return name
+        return f"Scene {scene_id}"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         if ATTR_EFFECT in kwargs:
             scene_id = self.coordinator.scenes[kwargs[ATTR_EFFECT]]
             await self.coordinator.runtime.load_scene(scene_id)
-            self._restored_effect = kwargs[ATTR_EFFECT]
         elif ATTR_HS_COLOR in kwargs or ATTR_BRIGHTNESS in kwargs:
             hue, sat = kwargs.get(ATTR_HS_COLOR, self.hs_color or (0.0, 0.0))
             bright_pct: int | None = None
@@ -178,7 +182,6 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], RestoreEnt
                 # Floor at 1, never 0 — HA brightness=1 must not map to device-off.
                 bright_pct = max(1, round(kwargs[ATTR_BRIGHTNESS] / 255 * 100))
             await self.coordinator.runtime.set_color(round(hue), round(sat), bright_pct)
-            self._restored_effect = None
         else:
             await self.coordinator.runtime.set_power(True)
         self.async_write_ha_state()
@@ -210,3 +213,23 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], RestoreEnt
 
     async def async_delete_scene(self, name: str) -> None:
         await self.coordinator.async_delete_scene(name)
+
+    async def async_list_device_scenes(self) -> ServiceResponse:
+        """Reads every scene actually stored on the strip directly (ci's ListScene +
+        GetScene), not from the local name registry — this can see scenes the
+        registry doesn't know about (unnamed factory presets, or ones saved by
+        another client) and can't drift from real device state the way the registry
+        could. Complements, not replaces, get_scene_library's shared recipe book:
+        this is "what's really on this device right now", the library is "named
+        starting-point recipes, possibly for a different device"."""
+        reverse_names = {sid: name for name, sid in self.coordinator.scenes.items()}
+        scenes: dict[str, dict[str, Any]] = {}
+        for scene_id in await self.coordinator.runtime.list_scenes():
+            style_id, params, colors = await self.coordinator.runtime.get_scene(scene_id)
+            scenes[str(scene_id)] = {
+                "name": reverse_names.get(scene_id),
+                "motion_style": ci.MOTIONS.get(style_id, f"0x{style_id:02x}").lower(),
+                "motion_params": scene_services.decode_motion_params(style_id, params),
+                "colors": scene_services.decode_colors(colors),
+            }
+        return {"scenes": scenes, "current_scene_id": self.coordinator.data.get("current_scene_id")}

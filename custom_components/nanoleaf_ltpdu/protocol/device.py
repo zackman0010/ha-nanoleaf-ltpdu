@@ -199,6 +199,32 @@ class Device:
     def load_scene(self, scene_id: int) -> None:
         self._ltpdu(tlv.build_set("ci", ci.build_load(scene_id)))
 
+    def _ci_request(self, payload: bytes) -> bytes:
+        """Send a ci sub-command and return the raw response bytes, widened back
+        from tlv.describe()'s int/hex-string `value` formatting (see
+        tlv._format_value) -- every real ci response is >2 bytes (a 5-byte header
+        alone), so this always takes the hex-string branch in practice, but handles
+        the 1-2 byte case defensively rather than assuming."""
+        records = self._ltpdu(tlv.build_set("ci", payload))
+        raw = tlv.get_value(records, "ci")
+        if isinstance(raw, int):
+            return raw.to_bytes(max(1, (raw.bit_length() + 7) // 8), "big")
+        if isinstance(raw, str) and raw.startswith("0x"):
+            return bytes.fromhex(raw[2:])
+        raise DeviceError(f"unexpected ci response value: {raw!r}")
+
+    def list_scenes(self) -> list[int]:
+        return ci.decode_list(self._ci_request(ci.build_list()))
+
+    def get_scene(self, scene_id: int) -> tuple[int, bytes, list[tuple[int, int, int]]]:
+        return ci.decode_get(self._ci_request(ci.build_get(scene_id)))
+
+    def delete_scene(self, scene_id: int) -> None:
+        self._ltpdu(tlv.build_set("ci", ci.build_delete(scene_id)))
+
+    def get_current_scene(self) -> int:
+        return ci.decode_current(self._ci_request(ci.build_current()))
+
     # -- lifecycle -----------------------------------------------------------------
 
     def close(self) -> None:

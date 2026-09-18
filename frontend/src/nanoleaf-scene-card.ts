@@ -20,7 +20,13 @@ import "./nanoleaf-scene-card-editor";
 
 const DOMAIN = "nanoleaf_ltpdu";
 const RESERVED_SCENE_NAME = "Northern Lights";
-const PREVIEW_DEBOUNCE_MS = 300;
+
+interface StripSnapshot {
+  on: boolean;
+  effect?: string;
+  hsColor?: [number, number];
+  brightness?: number;
+}
 
 function fieldLabel(field: string): string {
   return field
@@ -42,15 +48,20 @@ export class NanoleafSceneCard extends LitElement {
   @state() private _locallyDeleted = new Set<string>();
 
   // Scene editor — in-progress, unsaved. Save flow is a later milestone; this one
-  // covers style/param/color editing and live preview only.
+  // covers style/param/color editing and manual (button-triggered only — no
+  // live/auto preview, per feedback) preview.
   @state() private _editorStyle?: string; // capitalized display name, e.g. "Fade"
   @state() private _editorParams: Record<string, number> = {};
   @state() private _editorColors: SceneColor[] = [];
   @state() private _previewError?: string;
 
+  // The strip's state from just before the first Preview click in the current
+  // editing session — set once, restored (and cleared) by Cancel. Not cleared by
+  // further edits, since it describes the strip's prior state, not the editor's.
+  @state() private _preSnapshot?: StripSnapshot;
+
   private _hass?: HomeAssistant;
   private _loadStarted = false;
-  private _previewDebounceHandle?: ReturnType<typeof setTimeout>;
 
   public static getStubConfig(): LovelaceCardConfig {
     return { type: "custom:nanoleaf-scene-card", entity: "" };
@@ -129,25 +140,21 @@ export class NanoleafSceneCard extends LitElement {
     this._editorStyle = capitalize(recipe.motion_style);
     this._editorParams = { ...recipe.motion_params };
     this._editorColors = recipe.colors.map((c) => ({ ...c }));
-    this._schedulePreview();
   }
 
   private _onStyleSelect(styleName: string): void {
     this._editorStyle = styleName;
     this._editorParams = this._defaultParamsForStyle(styleName);
-    this._schedulePreview();
   }
 
   private _onParamInput(field: string, value: number): void {
     this._editorParams = { ...this._editorParams, [field]: value };
-    this._schedulePreview();
   }
 
   private _onColorInput(index: number, hex: string): void {
     const colors = [...this._editorColors];
     colors[index] = hexToHsb(hex);
     this._editorColors = colors;
-    this._schedulePreview();
   }
 
   private _addColorSlot(): void {
@@ -156,7 +163,6 @@ export class NanoleafSceneCard extends LitElement {
       return;
     }
     this._editorColors = [...this._editorColors, { hue: 0, saturation: 100, brightness: 100 }];
-    this._schedulePreview();
   }
 
   private _removeColorSlot(index: number): void {
@@ -165,19 +171,28 @@ export class NanoleafSceneCard extends LitElement {
       return;
     }
     this._editorColors = this._editorColors.filter((_, i) => i !== index);
-    this._schedulePreview();
   }
 
-  private _schedulePreview(): void {
-    if (this._previewDebounceHandle !== undefined) {
-      clearTimeout(this._previewDebounceHandle);
+  private _captureSnapshot(): void {
+    const entityId = this._config!.entity as string;
+    const entity = this._hass!.states[entityId];
+    if (!entity) {
+      return;
     }
-    this._previewDebounceHandle = setTimeout(() => void this._previewNow(), PREVIEW_DEBOUNCE_MS);
+    this._preSnapshot = {
+      on: entity.state === "on",
+      effect: entity.attributes.effect as string | undefined,
+      hsColor: entity.attributes.hs_color as [number, number] | undefined,
+      brightness: entity.attributes.brightness as number | undefined,
+    };
   }
 
   private async _previewNow(): Promise<void> {
     if (!this._hass || !this._editorStyle) {
       return;
+    }
+    if (!this._preSnapshot) {
+      this._captureSnapshot();
     }
     const entityId = this._config!.entity as string;
     try {
@@ -191,6 +206,34 @@ export class NanoleafSceneCard extends LitElement {
         },
         { entity_id: entityId }
       );
+      this._previewError = undefined;
+    } catch (err) {
+      this._previewError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  private async _cancelPreview(): Promise<void> {
+    const snapshot = this._preSnapshot;
+    if (!snapshot || !this._hass) {
+      return;
+    }
+    const entityId = this._config!.entity as string;
+    try {
+      if (!snapshot.on) {
+        await this._hass.callService("light", "turn_off", { entity_id: entityId });
+      } else if (snapshot.effect) {
+        await this._hass.callService("light", "turn_on", { entity_id: entityId, effect: snapshot.effect });
+      } else {
+        const data: Record<string, unknown> = { entity_id: entityId };
+        if (snapshot.hsColor) {
+          data.hs_color = snapshot.hsColor;
+        }
+        if (snapshot.brightness !== undefined) {
+          data.brightness = snapshot.brightness;
+        }
+        await this._hass.callService("light", "turn_on", data);
+      }
+      this._preSnapshot = undefined;
       this._previewError = undefined;
     } catch (err) {
       this._previewError = err instanceof Error ? err.message : String(err);
@@ -357,6 +400,9 @@ export class NanoleafSceneCard extends LitElement {
       </div>
 
       <button class="preview" @click=${() => this._previewNow()}>Preview</button>
+      ${this._preSnapshot
+        ? html`<button class="cancel" @click=${() => this._cancelPreview()}>Cancel preview</button>`
+        : nothing}
     `;
   }
 
@@ -470,6 +516,16 @@ export class NanoleafSceneCard extends LitElement {
       border-radius: 4px;
       background: var(--primary-color);
       color: var(--text-primary-color, #fff);
+      padding: 8px 16px;
+      cursor: pointer;
+    }
+    .cancel {
+      margin-top: 8px;
+      margin-left: 8px;
+      border: 1px solid var(--divider-color, #ccc);
+      border-radius: 4px;
+      background: none;
+      color: var(--primary-text-color);
       padding: 8px 16px;
       cursor: pointer;
     }

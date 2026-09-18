@@ -55,8 +55,11 @@ class _FakeDevice:
         self.connect_calls = 0
         self.authenticate_calls = 0
         self.get_state_calls = 0
+        self.get_current_scene_calls = 0
         self.fail_connect_times = 0
         self.call_order: list[str] = []
+        self.current_scene_id = 0
+        self.deleted_scene_ids: list[int] = []
 
     def connect(self) -> None:
         self.connect_calls += 1
@@ -73,6 +76,14 @@ class _FakeDevice:
         self.get_state_calls += 1
         self.call_order.append("get_state")
         return [{"path": "lb/0/oo", "op": "current", "value": 1}]
+
+    def get_current_scene(self) -> int:
+        self.get_current_scene_calls += 1
+        self.call_order.append("get_current_scene")
+        return self.current_scene_id
+
+    def delete_scene(self, scene_id: int) -> None:
+        self.deleted_scene_ids.append(scene_id)
 
     def close(self) -> None:
         pass
@@ -132,7 +143,7 @@ async def test_coordinator_reconnects_after_failure(hass: HomeAssistant, config_
     assert coordinator._connected is True
     assert fake.connect_calls == 2
     assert fake.authenticate_calls == 1
-    assert data == {"records": [{"path": "lb/0/oo", "op": "current", "value": 1}]}
+    assert data == {"records": [{"path": "lb/0/oo", "op": "current", "value": 1}], "current_scene_id": 0}
 
 
 async def test_coordinator_does_not_reconnect_when_already_connected(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
@@ -146,10 +157,13 @@ async def test_coordinator_does_not_reconnect_when_already_connected(hass: HomeA
     assert fake.connect_calls == 1  # only the first cycle re-handshakes
     assert fake.authenticate_calls == 1
     assert fake.get_state_calls == 2
+    assert fake.get_current_scene_calls == 2
 
 
 async def test_scene_registry_reserved_and_allocated_ids(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
     coordinator = NanoleafLtpduCoordinator(hass, config_entry)
+    fake = _FakeDevice()
+    coordinator.runtime = NanoleafLtpduRuntime(hass, fake)  # type: ignore[arg-type]
     await coordinator.async_load_scene_registry()
 
     # Reserved factory scenes are present from the start, with no allocation call.
@@ -167,12 +181,34 @@ async def test_scene_registry_reserved_and_allocated_ids(hass: HomeAssistant, co
 
     await coordinator.async_delete_scene("Sunset")
     assert "Sunset" not in coordinator.scenes
+    assert fake.deleted_scene_ids == [1]  # on-device delete, not just registry bookkeeping
 
     with pytest.raises(ValueError):
         await coordinator.async_delete_scene("Northern Lights")  # reserved, not deletable
 
     with pytest.raises(ValueError):
         await coordinator.async_allocate_scene_id("Northern Lights")  # reserved, not (re)savable either
+
+
+async def test_scene_delete_leaves_registry_intact_if_device_delete_fails(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """Device-side delete happens before the registry mapping is dropped — a scene
+    ID must not be forgotten for a scene that's actually still on the strip."""
+    coordinator = NanoleafLtpduCoordinator(hass, config_entry)
+    fake = _FakeDevice()
+
+    def failing_delete_scene(scene_id: int) -> None:
+        raise DeviceError("simulated device delete failure")
+
+    fake.delete_scene = failing_delete_scene  # type: ignore[method-assign]
+    coordinator.runtime = NanoleafLtpduRuntime(hass, fake)  # type: ignore[arg-type]
+    await coordinator.async_load_scene_registry()
+    await coordinator.async_allocate_scene_id("Sunset")
+
+    with pytest.raises(DeviceError):
+        await coordinator.async_delete_scene("Sunset")
+    assert coordinator.scenes["Sunset"] == 1
 
 
 async def test_scene_registry_persists_across_reload(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
