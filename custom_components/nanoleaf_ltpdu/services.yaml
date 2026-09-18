@@ -1,6 +1,9 @@
 get_scene_capabilities:
   fields: {}
 
+get_scene_library:
+  fields: {}
+
 preview_scene:
   target:
     entity:

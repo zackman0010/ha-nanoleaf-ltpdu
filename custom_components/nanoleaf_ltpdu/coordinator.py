@@ -111,6 +111,8 @@ class NanoleafLtpduCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_allocate_scene_id(self, name: str) -> int:
         """Return the existing ID for `name`, allocating (and persisting) a new one if needed."""
+        if name in RESERVED_SCENE_NAMES.values():
+            raise ValueError(f"'{name}' is a reserved factory scene name and cannot be (re)saved")
         scenes = self._scene_registry_data["scenes"]
         if name in scenes:
             return scenes[name]

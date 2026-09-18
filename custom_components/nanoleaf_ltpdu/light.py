@@ -21,7 +21,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import services as scene_services
-from .const import CONF_LABEL_ID, DOMAIN
+from .const import CONF_LABEL_ID, DOMAIN, SCENE_LIBRARY_KEY
 from .coordinator import NanoleafLtpduCoordinator
 from .protocol import device as protocol_device
 from .protocol import tlv
@@ -201,6 +201,11 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], RestoreEnt
         params = scene_services.encode_motion_params(style_id, motion_params)
         scene_id = await self.coordinator.async_allocate_scene_id(name)
         await self.coordinator.runtime.save_scene(scene_id, style_id, params, scene_services.encode_colors(colors))
+        # Also record the recipe in the shared, domain-wide library (scene_library.py)
+        # — a starting template for future edits/copies, not a live link back to any
+        # device's already-saved scene. See that module's docstring.
+        library = self.hass.data[SCENE_LIBRARY_KEY]
+        await library.async_save_recipe(name, motion_style, motion_params, colors)
         return {"scene_id": scene_id}
 
     async def async_delete_scene(self, name: str) -> None:

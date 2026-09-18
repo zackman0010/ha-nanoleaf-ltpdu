@@ -11,25 +11,41 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 
 from . import services as scene_services
-from .const import DOMAIN
+from .const import DOMAIN, SCENE_LIBRARY_KEY
 from .coordinator import NanoleafLtpduCoordinator
+from .scene_library import SceneLibrary
 
 PLATFORMS: list[Platform] = [Platform.LIGHT]
 
 SERVICE_GET_SCENE_CAPABILITIES = "get_scene_capabilities"
+SERVICE_GET_SCENE_LIBRARY = "get_scene_library"
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Domain-wide setup — registers the one service that isn't tied to a specific
-    strip (get_scene_capabilities just serializes ci.py's own constants)."""
+    """Domain-wide setup — registers the services that aren't tied to a specific
+    strip (get_scene_capabilities just serializes ci.py's own constants;
+    get_scene_library reads the shared scene-recipe Store, see scene_library.py) and
+    loads that shared library once, regardless of how many config entries exist."""
+    library = SceneLibrary(hass)
+    await library.async_load()
+    hass.data[SCENE_LIBRARY_KEY] = library
 
     async def _handle_get_scene_capabilities(call: ServiceCall) -> ServiceResponse:
         return scene_services.get_scene_capabilities()
+
+    async def _handle_get_scene_library(call: ServiceCall) -> ServiceResponse:
+        return {"recipes": library.recipes}
 
     hass.services.async_register(
         DOMAIN,
         SERVICE_GET_SCENE_CAPABILITIES,
         _handle_get_scene_capabilities,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_SCENE_LIBRARY,
+        _handle_get_scene_library,
         supports_response=SupportsResponse.ONLY,
     )
     return True

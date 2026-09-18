@@ -53,3 +53,9 @@ PENDING_TOKENS_KEY = f"{DOMAIN}_pending_tokens"
 # fire first. In-memory only, never persisted; never pruned, but bounded by the
 # number of distinct physical devices ever discovered — negligible.
 DISCOVERY_SIGHTINGS_KEY = f"{DOMAIN}_discovery_sightings"
+
+# The shared scene-recipe library (see scene_library.py) — domain-wide, not
+# per-config-entry like coordinator.py's scene ID registry. Lives at the hass.data
+# root (like PENDING_TOKENS_KEY/DISCOVERY_SIGHTINGS_KEY above), not nested under
+# hass.data[DOMAIN], which is keyed by entry_id for coordinators.
+SCENE_LIBRARY_KEY = f"{DOMAIN}_scene_library"

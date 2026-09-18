@@ -13,7 +13,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.nanoleaf_ltpdu import services as scene_services
-from custom_components.nanoleaf_ltpdu.const import CONF_AUTH_TOKEN, CONF_HOST, CONF_LABEL_ID, DOMAIN
+from custom_components.nanoleaf_ltpdu.const import CONF_AUTH_TOKEN, CONF_HOST, CONF_LABEL_ID, DOMAIN, SCENE_LIBRARY_KEY
 from custom_components.nanoleaf_ltpdu.light import NanoleafLtpduLight
 from custom_components.nanoleaf_ltpdu.protocol import ci, tlv
 
@@ -105,21 +105,40 @@ class _FakeCoordinator:
         return self._names[name]
 
 
+class _FakeSceneLibrary:
+    def __init__(self) -> None:
+        self.saved_recipes: list[tuple] = []
+
+    async def async_save_recipe(self, name: str, motion_style: str, motion_params: dict, colors: list[dict]) -> None:
+        self.saved_recipes.append((name, motion_style, motion_params, colors))
+
+
+class _FakeHass:
+    """Just enough of hass for async_save_scene's `self.hass.data[SCENE_LIBRARY_KEY]`
+    lookup — no real HomeAssistant instance needed for this test."""
+
+    def __init__(self, scene_library: _FakeSceneLibrary) -> None:
+        self.data = {SCENE_LIBRARY_KEY: scene_library}
+
+
 async def test_light_save_scene_allocates_id_and_dispatches_byte_exact_params() -> None:
     entry = MockConfigEntry(domain=DOMAIN, unique_id="AB12", data={CONF_LABEL_ID: "AB12", CONF_HOST: "::1", CONF_AUTH_TOKEN: "00"})
     coordinator = _FakeCoordinator()
+    scene_library = _FakeSceneLibrary()
     light = NanoleafLtpduLight.__new__(NanoleafLtpduLight)
     light.coordinator = coordinator  # type: ignore[assignment]
+    light.hass = _FakeHass(scene_library)  # type: ignore[assignment]
 
-    response = await light.async_save_scene(
-        name="Sunset",
-        motion_style="fade",
-        motion_params={"speed": 0x18, "delay": 0x00, "loop": 0x01},
-        colors=[{"hue": h, "saturation": s, "brightness": b} for h, s, b in HSB_TEST_COLORS],
-    )
+    motion_params = {"speed": 0x18, "delay": 0x00, "loop": 0x01}
+    colors = [{"hue": h, "saturation": s, "brightness": b} for h, s, b in HSB_TEST_COLORS]
+    response = await light.async_save_scene(name="Sunset", motion_style="fade", motion_params=motion_params, colors=colors)
+
     assert response == {"scene_id": 1}
-    (scene_id, style_id, params, colors) = coordinator.runtime.calls[0]
+    (scene_id, style_id, params, dispatched_colors) = coordinator.runtime.calls[0]
     assert scene_id == 1
     assert style_id == 0x01
     assert params == bytes.fromhex("180001")
-    assert colors == HSB_TEST_COLORS
+    assert dispatched_colors == HSB_TEST_COLORS
+
+    # Also recorded in the shared scene library — see scene_library.py.
+    assert scene_library.saved_recipes == [("Sunset", "fade", motion_params, colors)]

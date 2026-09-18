@@ -171,6 +171,9 @@ async def test_scene_registry_reserved_and_allocated_ids(hass: HomeAssistant, co
     with pytest.raises(ValueError):
         await coordinator.async_delete_scene("Northern Lights")  # reserved, not deletable
 
+    with pytest.raises(ValueError):
+        await coordinator.async_allocate_scene_id("Northern Lights")  # reserved, not (re)savable either
+
 
 async def test_scene_registry_persists_across_reload(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
     coordinator_a = NanoleafLtpduCoordinator(hass, config_entry)
