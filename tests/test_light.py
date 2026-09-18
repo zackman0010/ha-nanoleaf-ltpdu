@@ -19,7 +19,7 @@ from homeassistant.components.light import ATTR_BRIGHTNESS, ATTR_EFFECT, ATTR_HS
 from homeassistant.core import State
 
 from custom_components.nanoleaf_ltpdu.const import CONF_AUTH_TOKEN, CONF_HOST, CONF_LABEL_ID, DOMAIN
-from custom_components.nanoleaf_ltpdu.light import NanoleafLtpduLight, _coerce_int
+from custom_components.nanoleaf_ltpdu.light import NanoleafLtpduLight, _coerce_int, _model_from_title
 
 
 class _FakeRuntime:
@@ -99,6 +99,56 @@ def test_brightness_zero_percent_maps_to_zero_not_one() -> None:
 def test_effect_list_reflects_coordinator_scenes() -> None:
     light = _make_light([], scenes={"Northern Lights": 0xFA, "Sunset": 1, "Ocean": 2})
     assert light.effect_list == ["Northern Lights", "Sunset", "Ocean"]
+
+
+# -- DeviceInfo population from the `di` record (Device Info page: model/serial/versions) --
+
+def test_model_from_title_strips_trailing_label_id() -> None:
+    assert _model_from_title("SecretLab MagRGB 4SZ5", "4SZ5") == "SecretLab MagRGB"
+
+
+def test_model_from_title_falls_back_to_full_title_when_renamed() -> None:
+    """entry.title can be freely renamed by the user in HA after setup — if it no
+    longer ends with the label_id, showing the whole (renamed) title beats guessing
+    wrong at which word was the model name."""
+    assert _model_from_title("Living Room Strip", "4SZ5") == "Living Room Strip"
+
+
+def test_device_info_includes_model_and_identity_from_di_record() -> None:
+    """Byte-exact real captured `di` value (mitm_capture.jsonl, device N24250K0A48 /
+    "4SZ5") — same one protocol/test_against_capture.py locks in for parse_device_info
+    itself; this test proves it actually reaches DeviceInfo, not just the parser."""
+    records = [
+        {
+            "path": "di",
+            "op": "current",
+            "value": "0x00322e302e300000000000312e362e343900004e32343235304b30413438385cfbfffed50072",
+        },
+    ]
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="4SZ5",
+        title="SecretLab MagRGB 4SZ5",
+        data={CONF_LABEL_ID: "4SZ5", CONF_HOST: "::1", CONF_AUTH_TOKEN: "00"},
+    )
+    coordinator = _FakeCoordinator(records)
+    light = NanoleafLtpduLight(coordinator, entry)  # type: ignore[arg-type]
+
+    assert light._attr_device_info["model"] == "SecretLab MagRGB"
+    assert light._attr_device_info["serial_number"] == "N24250K0A48"
+    assert light._attr_device_info["sw_version"] == "1.6.49"
+    assert light._attr_device_info["hw_version"] == "2.0.0"
+
+
+def test_device_info_omits_identity_fields_when_di_missing() -> None:
+    """A poll response without a `di` record (shouldn't normally happen — di is part
+    of every full_state_query() — but must not crash entity construction if it did)
+    must not populate placeholder/None values for fields we have no data for."""
+    light = _make_light([])
+
+    assert "serial_number" not in light._attr_device_info
+    assert "sw_version" not in light._attr_device_info
+    assert "hw_version" not in light._attr_device_info
 
 
 # -- async_turn_on branches -----------------------------------------------------------

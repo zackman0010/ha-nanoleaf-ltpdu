@@ -119,6 +119,19 @@ def test_device_get_state_uses_coap_get_and_set_uses_post() -> None:
     print("device.set() uses CoAP POST: OK")
 
 
+def test_device_parse_device_info_matches_real_capture() -> None:
+    # -- device.py: parse_device_info() against a real captured `di` response
+    #    (mitm_capture.jsonl line 7, device N24250K0A48 / "4SZ5") --
+    identity = device.parse_device_info(
+        "0x00322e302e300000000000312e362e343900004e32343235304b30413438385cfbfffed50072"
+    )
+    got = (identity.hw_version, identity.fw_version, identity.serial_number, identity.eui64.hex())
+    expected = ("2.0.0", "1.6.49", "N24250K0A48", "385cfbfffed50072")
+    if got != expected:
+        fail(f"parse_device_info() mismatch: got {got}, expected {expected}")
+    print("device.parse_device_info() matches real capture: OK")
+
+
 def test_thread_credentials_pan_id_byte_order_matches_between_both_constructors() -> None:
     """
     thread_credentials.py has two constructors: from_ot_ctl_dataset() (discrete field

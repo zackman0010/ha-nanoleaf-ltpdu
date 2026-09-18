@@ -23,6 +23,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import services as scene_services
 from .const import CONF_LABEL_ID, DOMAIN
 from .coordinator import NanoleafLtpduCoordinator
+from .protocol import device as protocol_device
 from .protocol import tlv
 
 SERVICE_PREVIEW_SCENE = "preview_scene"
@@ -45,6 +46,39 @@ def _coerce_int(value: Any) -> int | None:
     if isinstance(value, str) and value.startswith("0x"):
         return int(value, 16)
     return None
+
+
+def _model_from_title(title: str, label_id: str) -> str:
+    """entry.title is always "<model name> <label_id>" (see config_flow.py's
+    _instance_name_from_zeroconf_name / _label_id_from_zeroconf_name, and
+    async_step_manual's f"SecretLab MagRGB {label_id}") — strip the trailing
+    label_id token to get just the model name for DeviceInfo's `model` field.
+    Falls back to the full title if it doesn't end with the expected label_id
+    (e.g. the user renamed the entry in HA after setup)."""
+    prefix, _, suffix = title.rpartition(" ")
+    return prefix if suffix == label_id else title
+
+
+def _device_identity_info(records: list[dict]) -> dict[str, str]:
+    """Populate DeviceInfo's serial_number/sw_version/hw_version from the `di` path —
+    already included in every full_state_query() poll (see coordinator.py) but never
+    previously decoded, which is why the Device Info page has been missing this. See
+    protocol.device.parse_device_info's docstring for what's confirmed (serial
+    number, matched independently against Nanoleaf Desktop's own cache) vs. inferred
+    (which version string is "hardware" vs. "firmware"). Only includes fields that
+    actually parsed."""
+    di_value = tlv.get_value(records, "di")
+    if not isinstance(di_value, str):
+        return {}
+    identity = protocol_device.parse_device_info(di_value)
+    info: dict[str, str] = {}
+    if identity.hw_version is not None:
+        info["hw_version"] = identity.hw_version
+    if identity.fw_version is not None:
+        info["sw_version"] = identity.fw_version
+    if identity.serial_number is not None:
+        info["serial_number"] = identity.serial_number
+    return info
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
@@ -91,6 +125,8 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], RestoreEnt
             "identifiers": {(DOMAIN, label_id)},
             "name": entry.title,  # reflects the device's own discovered model name
             "manufacturer": "Nanoleaf",
+            "model": _model_from_title(entry.title, label_id),
+            **_device_identity_info(coordinator.data["records"]),
         }
         self._restored_effect: str | None = None
 

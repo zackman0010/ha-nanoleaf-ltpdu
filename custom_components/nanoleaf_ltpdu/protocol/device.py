@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import random
 import socket
+from dataclasses import dataclass
 
 from . import coap
 from . import crypto
@@ -24,6 +25,57 @@ RECV_TIMEOUT = 5.0
 
 class DeviceError(Exception):
     pass
+
+
+@dataclass
+class DeviceIdentity:
+    hw_version: str | None
+    fw_version: str | None
+    serial_number: str | None
+    eui64: bytes | None  # 8 bytes — Thread IEEE 802.15.4 extended address
+
+
+def parse_device_info(di_hex: str) -> DeviceIdentity:
+    """Decode the `di` path's raw value, as returned by get_state()/full_state_query().
+
+    Byte-exact verified against real captured ground truth (mitm_capture.jsonl,
+    device N24250K0A48 / label "4SZ5"): a leading reserved byte, then two
+    NUL-terminated ASCII version strings, then the serial number, then the raw
+    8-byte Thread extended address (EUI64) as the LAST 8 bytes of the blob. The
+    serial number decoded this way ("N24250K0A48") independently matches the same
+    device's serial as cached by Nanoleaf Desktop — strong confirmation this is a
+    real serial number field, not a coincidental byte run.
+
+    Only verified against this ONE physical device/model (a Secretlab MagRGB
+    strip) — parses defensively rather than assuming this generalizes: the eui64
+    is read from the fixed-width tail (always 8 bytes — a hard Thread protocol
+    constant, not something this parser has to guess), and everything else comes
+    from splitting the remaining bytes on NUL, so a different serial-number length
+    on another model still parses correctly as long as the same overall shape
+    (reserved byte + 2 version strings + serial + eui64) holds. Fields that can't
+    be parsed come back None rather than raising or guessing.
+
+    Which of the two version strings is "hardware" vs. "firmware" is inferred from
+    their relative order and their X.Y.Z shape — not independently confirmed the
+    way the serial number and eui64 are — but it matches the same two-version
+    shape ("Firmware: 4.1.3" / "Hardware: 4.0.8") a sibling Nanoleaf Essentials
+    device (paired via Matter instead) reports for these exact fields.
+    """
+    try:
+        raw = bytes.fromhex(di_hex.removeprefix("0x"))
+    except ValueError:
+        return DeviceIdentity(None, None, None, None)
+    if len(raw) < 9:  # 1 reserved byte + at least one field + an 8-byte eui64
+        return DeviceIdentity(None, None, None, None)
+
+    eui64 = raw[-8:]
+    remainder = raw[1:-8]
+    fields = [part.decode("ascii", errors="replace") for part in remainder.split(b"\x00") if part]
+
+    hw_version = fields[0] if len(fields) > 0 else None
+    fw_version = fields[1] if len(fields) > 1 else None
+    serial_number = fields[2] if len(fields) > 2 else None
+    return DeviceIdentity(hw_version, fw_version, serial_number, eui64)
 
 
 class Device:
