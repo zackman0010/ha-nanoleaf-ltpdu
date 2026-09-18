@@ -76,6 +76,7 @@
       "cannot_connect": "Could not connect — check the address, port, and auth token.",
       "no_devices_found": "No factory-reset strips found nearby. Make sure it's powered on and hasn't already been paired.",
       "ble_pairing_failed": "Pairing failed — double check the pairing code and try again.",
+      "ble_connection_failed": "Couldn't establish a Bluetooth connection to the strip. Make sure it's powered on and in range, then try again.",
       "thread_credentials_rejected": "The strip rejected the Thread network credentials.",
       "invalid_thread_credentials": "Those Thread network details don't look right — check the PAN ID, extended PAN ID, and network key are valid hex."
     }

@@ -49,7 +49,7 @@ from .const import (
 )
 from .protocol import coap
 from .protocol import device as protocol_device
-from .protocol.ble_provision import BleProvisionError, BleProvisioner
+from .protocol.ble_provision import BleConnectionError, BleProvisionError, BleProvisioner
 from .protocol.thread_credentials import ThreadCredentials
 
 MANUAL_THREAD_CREDS_SCHEMA = vol.Schema(
@@ -319,6 +319,10 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
             )
         try:
             await self._ble_pair_task
+        except BleConnectionError as err:
+            LOGGER.debug("BLE connection failed for %s: %s", self._ble_address, err)
+            self._ble_step_error = "ble_connection_failed"
+            return self.async_show_progress_done(next_step_id="ble_pairing_code")
         except BleProvisionError as err:
             LOGGER.debug("BLE pairing failed for %s: %s", self._ble_address, err)
             self._ble_step_error = "ble_pairing_failed"
@@ -328,16 +332,32 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_progress_done(next_step_id="thread_creds_source")
 
     async def _async_do_ble_pair(self) -> None:
+        """Every exception raised here must end up as a BleProvisionError (or the
+        BleConnectionError subclass) — async_step_ble_pair only catches those. Letting
+        anything else (e.g. bleak_retry_connector's BleakNotFoundError, or a raw
+        TimeoutError from an ESPHome Bluetooth proxy) escape uncaught previously left
+        the config flow's step orchestration crashing with an unhandled exception:
+        the frontend just spun forever with nothing but a logged error to explain why,
+        instead of showing the user a real error and a way to retry."""
         assert self._ble_address is not None
         assert self._pairing_code is not None
         ble_device = bluetooth.async_ble_device_from_address(self.hass, self._ble_address, connectable=True)
         if ble_device is None:
-            raise BleProvisionError("device not found — it may be out of range or no longer advertising")
-        self._ble_client = await establish_connection(
-            BleakClientWithServiceCache, ble_device, f"{DOMAIN}-{self._ble_address}", max_attempts=3
-        )
+            raise BleConnectionError("device not found — it may be out of range or no longer advertising")
+        try:
+            self._ble_client = await establish_connection(
+                BleakClientWithServiceCache, ble_device, f"{DOMAIN}-{self._ble_address}", max_attempts=3
+            )
+        except Exception as err:
+            raise BleConnectionError(f"could not establish a Bluetooth connection: {err}") from err
+
         self._ble_provisioner = BleProvisioner(self._ble_address, self._pairing_code, client=self._ble_client)
-        token = await self._ble_provisioner.pair()
+        try:
+            token = await self._ble_provisioner.pair()
+        except BleProvisionError:
+            raise
+        except Exception as err:
+            raise BleConnectionError(f"Bluetooth connection lost during pairing: {err}") from err
         self._ble_auth_token_hex = token.hex()
 
     async def async_step_thread_creds_source(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -381,6 +401,10 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
             )
         try:
             await self._ble_push_creds_task
+        except BleConnectionError as err:
+            LOGGER.debug("BLE connection failed pushing Thread credentials to %s: %s", self._ble_address, err)
+            self._ble_step_error = "ble_connection_failed"
+            return self.async_show_progress_done(next_step_id="thread_creds_source")
         except BleProvisionError:
             self._ble_step_error = "thread_credentials_rejected"
             return self.async_show_progress_done(next_step_id="thread_creds_source")
@@ -389,9 +413,16 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_progress_done(next_step_id="ble_onboarding_done")
 
     async def _async_do_push_creds(self) -> None:
+        """See _async_do_ble_pair's docstring — same requirement that every exception
+        here end up as a BleProvisionError/BleConnectionError, never escape raw."""
         assert self._ble_provisioner is not None
         assert self._thread_creds is not None
-        resp = await self._ble_provisioner.write_thread_credentials(self._thread_creds)
+        try:
+            resp = await self._ble_provisioner.write_thread_credentials(self._thread_creds)
+        except BleProvisionError:
+            raise
+        except Exception as err:
+            raise BleConnectionError(f"Bluetooth connection lost while sending Thread credentials: {err}") from err
         if resp.code != 0x44:  # CoAP 2.04 Changed
             raise BleProvisionError(f"strip rejected Thread credentials (CoAP code {resp.code:#04x})")
 

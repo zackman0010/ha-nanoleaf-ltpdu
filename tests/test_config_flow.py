@@ -31,7 +31,7 @@ from custom_components.nanoleaf_ltpdu.const import (
     CONF_THREAD_PANID,
     PENDING_TOKENS_KEY,
 )
-from custom_components.nanoleaf_ltpdu.protocol.ble_provision import BleProvisionError, BleProvisioner
+from custom_components.nanoleaf_ltpdu.protocol.ble_provision import BleConnectionError, BleProvisionError, BleProvisioner
 from custom_components.nanoleaf_ltpdu.protocol.thread_credentials import ThreadCredentials, build_thread_credentials_tlv
 
 
@@ -171,6 +171,35 @@ async def test_ble_pair_device_not_found_raises_provision_error(hass: HomeAssist
             await flow._async_do_ble_pair()
 
 
+async def test_ble_pair_raw_transport_exception_is_converted_not_left_unhandled(hass: HomeAssistant) -> None:
+    """Regression test: establish_connection can raise things that are NOT
+    BleProvisionError (e.g. bleak_retry_connector's BleakNotFoundError, or a raw
+    TimeoutError from a Bluetooth proxy backend). Previously this escaped
+    async_step_ble_pair uncaught — the flow's step orchestration crashed with an
+    unhandled exception and the frontend just spun forever instead of showing an
+    error. It must now surface as a BleConnectionError and route back to the
+    pairing-code step with a distinct error, same as any other pairing failure."""
+    flow = _make_flow(hass)
+    flow._ble_address = "AA:BB:CC:DD:EE:FF"
+    flow._pairing_code = "12345678"
+
+    with (
+        patch.object(cf.bluetooth, "async_ble_device_from_address", return_value=_FakeBleDevice()),
+        patch.object(cf, "establish_connection", AsyncMock(side_effect=TimeoutError("connect response timed out"))),
+    ):
+        await flow.async_step_ble_pair()
+        task = flow._ble_pair_task
+        with pytest.raises(BleConnectionError):
+            await task
+        result = await flow.async_step_ble_pair()
+
+    assert result["type"].value == "progress_done"
+    assert result["step_id"] == "ble_pairing_code"
+
+    form = await flow.async_step_ble_pairing_code()
+    assert form["errors"] == {"base": "ble_connection_failed"}
+
+
 async def test_manual_thread_creds_builds_credentials_and_proceeds(hass: HomeAssistant) -> None:
     flow = _make_flow(hass)
     flow._ble_provisioner = object()  # not exercised in this test — push_creds itself is separately tested
@@ -233,6 +262,29 @@ async def test_ble_push_creds_rejected_returns_to_thread_creds_source(hass: Home
         result = await flow.async_step_ble_push_creds()
 
     assert result["step_id"] == "thread_creds_source"
+
+
+async def test_ble_push_creds_raw_transport_exception_is_converted_not_left_unhandled(hass: HomeAssistant) -> None:
+    """Same regression as test_ble_pair_raw_transport_exception_is_converted_not_left_unhandled,
+    but for the credential-push step — a lost BLE connection mid-write must not escape
+    async_step_ble_push_creds unhandled either."""
+    flow = _make_flow(hass)
+    flow._ble_provisioner = BleProvisioner("AA:BB:CC:DD:EE:FF", "94514965")
+    flow._thread_creds = ThreadCredentials.from_ot_ctl_dataset(
+        network_name="net", channel=11, panid_hex="1234", extpanid_hex="0011223344556677", networkkey_hex="00" * 16
+    )
+
+    with patch.object(
+        cf.BleProvisioner, "write_thread_credentials", AsyncMock(side_effect=OSError("device disconnected"))
+    ):
+        await flow.async_step_ble_push_creds()
+        task = flow._ble_push_creds_task
+        with pytest.raises(BleConnectionError):
+            await task
+        result = await flow.async_step_ble_push_creds()
+
+    assert result["step_id"] == "thread_creds_source"
+    assert flow._ble_step_error == "ble_connection_failed"
 
 
 async def test_ble_onboarding_done_stashes_token_and_disconnects(hass: HomeAssistant) -> None:

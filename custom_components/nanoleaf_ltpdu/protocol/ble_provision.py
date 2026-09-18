@@ -64,6 +64,15 @@ class BleProvisionError(Exception):
     pass
 
 
+class BleConnectionError(BleProvisionError):
+    """The BLE transport itself failed (device not found, connect timeout, adapter/
+    proxy error) — distinct from an application-layer pairing rejection (bad code,
+    already paired), which raises plain BleProvisionError instead. Callers that only
+    care about "pairing didn't work" can still catch BleProvisionError; callers that
+    want to tell the two apart (e.g. to show a more accurate error message) can catch
+    this subclass first."""
+
+
 class BleProvisioner:
     """
     Mirrors homekitclient.networking.bluetooth.b's pairing sequence: write our pubkey,
