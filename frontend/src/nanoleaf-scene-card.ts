@@ -16,6 +16,7 @@ import {
 } from "./capabilities";
 import { hexToHsb, hsbToHex } from "./color";
 import type { HomeAssistant, LovelaceCardConfig } from "./ha-types";
+import "./nanoleaf-scene-card-editor";
 
 const DOMAIN = "nanoleaf_ltpdu";
 const RESERVED_SCENE_NAME = "Northern Lights";
@@ -53,6 +54,10 @@ export class NanoleafSceneCard extends LitElement {
 
   public static getStubConfig(): LovelaceCardConfig {
     return { type: "custom:nanoleaf-scene-card", entity: "" };
+  }
+
+  public static getConfigElement(): HTMLElement {
+    return document.createElement("nanoleaf-scene-card-editor");
   }
 
   public setConfig(config: LovelaceCardConfig): void {
