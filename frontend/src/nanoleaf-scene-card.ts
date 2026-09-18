@@ -9,13 +9,24 @@ import {
   capitalize,
   fetchCapabilities,
   fetchLibrary,
+  fieldsForStyle,
   type SceneCapabilities,
+  type SceneColor,
   type SceneLibraryResponse,
 } from "./capabilities";
+import { hexToHsb, hsbToHex } from "./color";
 import type { HomeAssistant, LovelaceCardConfig } from "./ha-types";
 
 const DOMAIN = "nanoleaf_ltpdu";
 const RESERVED_SCENE_NAME = "Northern Lights";
+const PREVIEW_DEBOUNCE_MS = 300;
+
+function fieldLabel(field: string): string {
+  return field
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
 
 @customElement("nanoleaf-scene-card")
 export class NanoleafSceneCard extends LitElement {
@@ -29,8 +40,16 @@ export class NanoleafSceneCard extends LitElement {
   // force a state push — see the plan's "Confirmed backend API" section).
   @state() private _locallyDeleted = new Set<string>();
 
+  // Scene editor — in-progress, unsaved. Save flow is a later milestone; this one
+  // covers style/param/color editing and live preview only.
+  @state() private _editorStyle?: string; // capitalized display name, e.g. "Fade"
+  @state() private _editorParams: Record<string, number> = {};
+  @state() private _editorColors: SceneColor[] = [];
+  @state() private _previewError?: string;
+
   private _hass?: HomeAssistant;
   private _loadStarted = false;
+  private _previewDebounceHandle?: ReturnType<typeof setTimeout>;
 
   public static getStubConfig(): LovelaceCardConfig {
     return { type: "custom:nanoleaf-scene-card", entity: "" };
@@ -71,8 +90,105 @@ export class NanoleafSceneCard extends LitElement {
       ]);
       this._capabilities = capabilities;
       this._library = library;
+      this._resetEditor();
     } catch (err) {
       this._loadError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  // -- scene editor: style/params/colors + live preview -------------------------
+
+  private _defaultParamsForStyle(styleName: string): Record<string, number> {
+    const params: Record<string, number> = {};
+    for (const [field, range] of fieldsForStyle(this._capabilities!, styleName)) {
+      params[field] = Math.round((range.min + range.max) / 2);
+    }
+    return params;
+  }
+
+  private _resetEditor(): void {
+    if (!this._capabilities) {
+      return;
+    }
+    const firstStyle = Object.keys(this._capabilities.motion_styles)[0];
+    this._editorStyle = firstStyle;
+    this._editorParams = this._defaultParamsForStyle(firstStyle);
+    this._editorColors = [{ hue: 0, saturation: 100, brightness: 100 }];
+  }
+
+  private _loadRecipeIntoEditor(name: string): void {
+    const recipe = this._library?.recipes[name];
+    if (!recipe) {
+      return;
+    }
+    this._editorStyle = capitalize(recipe.motion_style);
+    this._editorParams = { ...recipe.motion_params };
+    this._editorColors = recipe.colors.map((c) => ({ ...c }));
+    this._schedulePreview();
+  }
+
+  private _onStyleSelect(styleName: string): void {
+    this._editorStyle = styleName;
+    this._editorParams = this._defaultParamsForStyle(styleName);
+    this._schedulePreview();
+  }
+
+  private _onParamInput(field: string, value: number): void {
+    this._editorParams = { ...this._editorParams, [field]: value };
+    this._schedulePreview();
+  }
+
+  private _onColorInput(index: number, hex: string): void {
+    const colors = [...this._editorColors];
+    colors[index] = hexToHsb(hex);
+    this._editorColors = colors;
+    this._schedulePreview();
+  }
+
+  private _addColorSlot(): void {
+    const max = this._capabilities?.color_slots.max ?? 7;
+    if (this._editorColors.length >= max) {
+      return;
+    }
+    this._editorColors = [...this._editorColors, { hue: 0, saturation: 100, brightness: 100 }];
+    this._schedulePreview();
+  }
+
+  private _removeColorSlot(index: number): void {
+    const min = this._capabilities?.color_slots.min ?? 1;
+    if (this._editorColors.length <= min) {
+      return;
+    }
+    this._editorColors = this._editorColors.filter((_, i) => i !== index);
+    this._schedulePreview();
+  }
+
+  private _schedulePreview(): void {
+    if (this._previewDebounceHandle !== undefined) {
+      clearTimeout(this._previewDebounceHandle);
+    }
+    this._previewDebounceHandle = setTimeout(() => void this._previewNow(), PREVIEW_DEBOUNCE_MS);
+  }
+
+  private async _previewNow(): Promise<void> {
+    if (!this._hass || !this._editorStyle) {
+      return;
+    }
+    const entityId = this._config!.entity as string;
+    try {
+      await this._hass.callService(
+        DOMAIN,
+        "preview_scene",
+        {
+          motion_style: this._editorStyle.toLowerCase(),
+          motion_params: this._editorParams,
+          colors: this._editorColors,
+        },
+        { entity_id: entityId }
+      );
+      this._previewError = undefined;
+    } catch (err) {
+      this._previewError = err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -148,13 +264,94 @@ export class NanoleafSceneCard extends LitElement {
                       <li>
                         <span class="scene-name">${name}</span>
                         <span class="muted">(${capitalize(recipe.motion_style)}${onThisDevice ? " · on this device" : ""})</span>
+                        <button class="load" @click=${() => this._loadRecipeIntoEditor(name)}>Load into editor</button>
                       </li>
                     `;
                   })}
                 </ul>
               `}
+
+          ${this._capabilities ? this._renderEditor() : nothing}
         </div>
       </ha-card>
+    `;
+  }
+
+  private _renderEditor() {
+    const caps = this._capabilities!;
+    const styleNames = Object.keys(caps.motion_styles);
+    const fields = this._editorStyle ? fieldsForStyle(caps, this._editorStyle) : [];
+    const colorMax = caps.color_slots.max;
+    const colorMin = caps.color_slots.min;
+
+    return html`
+      <h3>
+        Scene editor
+        <button class="load" @click=${() => this._resetEditor()}>New scene</button>
+      </h3>
+      ${this._previewError ? html`<p class="error">${this._previewError}</p>` : nothing}
+
+      <label class="field">
+        <span>Motion style</span>
+        <select @change=${(e: Event) => this._onStyleSelect((e.target as HTMLSelectElement).value)}>
+          ${styleNames.map(
+            (name) => html`<option value=${name} ?selected=${name === this._editorStyle}>${name}</option>`
+          )}
+        </select>
+      </label>
+
+      ${fields.map(([field, range]) => {
+        const value = this._editorParams[field] ?? range.min;
+        const isToggle = range.max - range.min === 1;
+        const note = caps.field_notes[field];
+        return html`
+          <label class="field">
+            <span>${fieldLabel(field)}${note ? html`<span class="muted"> — ${note}</span>` : nothing}</span>
+            ${isToggle
+              ? html`<input
+                  type="checkbox"
+                  .checked=${value === range.max}
+                  @change=${(e: Event) =>
+                    this._onParamInput(field, (e.target as HTMLInputElement).checked ? range.max : range.min)}
+                />`
+              : html`
+                  <input
+                    type="range"
+                    min=${range.min}
+                    max=${range.max}
+                    .value=${String(value)}
+                    @input=${(e: Event) => this._onParamInput(field, Number((e.target as HTMLInputElement).value))}
+                  />
+                  <span class="value">${value}</span>
+                `}
+          </label>
+        `;
+      })}
+
+      <div class="colors">
+        <span>Colors</span>
+        <div class="color-slots">
+          ${this._editorColors.map(
+            (color, index) => html`
+              <span class="color-slot">
+                <input
+                  type="color"
+                  .value=${hsbToHex(color)}
+                  @input=${(e: Event) => this._onColorInput(index, (e.target as HTMLInputElement).value)}
+                />
+                ${this._editorColors.length > colorMin
+                  ? html`<button class="delete" @click=${() => this._removeColorSlot(index)}>✕</button>`
+                  : nothing}
+              </span>
+            `
+          )}
+          ${this._editorColors.length < colorMax
+            ? html`<button class="add-color" @click=${() => this._addColorSlot()}>+</button>`
+            : nothing}
+        </div>
+      </div>
+
+      <button class="preview" @click=${() => this._previewNow()}>Preview</button>
     `;
   }
 
@@ -201,6 +398,75 @@ export class NanoleafSceneCard extends LitElement {
     }
     .error {
       color: var(--error-color, #db4437);
+    }
+    .load {
+      background: none;
+      border: 1px solid var(--divider-color, #ccc);
+      border-radius: 4px;
+      color: var(--primary-text-color);
+      cursor: pointer;
+      font-size: 0.85em;
+      padding: 2px 8px;
+      margin-left: 8px;
+    }
+    .field {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 0;
+    }
+    .field > span:first-child {
+      flex: 0 0 40%;
+    }
+    .field input[type="range"] {
+      flex: 1;
+    }
+    .field .value {
+      flex: 0 0 2.5em;
+      text-align: right;
+    }
+    .colors {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 12px 0;
+    }
+    .color-slots {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+    .color-slot {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+    }
+    .color-slot input[type="color"] {
+      width: 32px;
+      height: 32px;
+      border: none;
+      padding: 0;
+      background: none;
+    }
+    .add-color {
+      width: 32px;
+      height: 32px;
+      border: 1px dashed var(--divider-color, #ccc);
+      border-radius: 4px;
+      background: none;
+      cursor: pointer;
+      font-size: 1.2em;
+      color: var(--primary-text-color);
+    }
+    .preview {
+      margin-top: 8px;
+      border: none;
+      border-radius: 4px;
+      background: var(--primary-color);
+      color: var(--text-primary-color, #fff);
+      padding: 8px 16px;
+      cursor: pointer;
     }
   `;
 }
