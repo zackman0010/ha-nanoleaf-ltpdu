@@ -1,0 +1,92 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a Nanoleaf LTPDU strip",
+        "menu_options": {
+          "manual": "Add a strip already on your Thread network",
+          "ble_scan": "Add a new (factory-reset) strip via Bluetooth"
+        }
+      },
+      "manual": {
+        "title": "Add a Nanoleaf LTPDU strip",
+        "description": "Add a strip that's already on your Thread network. Its label ID is printed on the physical device (e.g. \"AB12\").",
+        "data": {
+          "label_id": "Label ID",
+          "host": "IPv6 address",
+          "port": "Port",
+          "auth_token": "Auth token (hex)"
+        }
+      },
+      "zeroconf_confirm": {
+        "title": "Add {name}",
+        "description": "Found \"{label_id}\" on your Thread network. Enter its existing auth token (from Nanoleaf Desktop) to add it — this does not re-pair the strip.",
+        "data": {
+          "auth_token": "Auth token (hex)"
+        }
+      },
+      "ble_scan": {
+        "title": "Select a strip",
+        "description": "Choose the factory-reset strip to pair.",
+        "data": {
+          "ble_address": "Strip"
+        }
+      },
+      "discovery_choice": {
+        "title": "How would you like to add {name}?",
+        "description": "This strip was found both on your Thread network and over Bluetooth.",
+        "menu_options": {
+          "discovery_choice_thread": "Use its existing Thread connection (enter its saved auth token)",
+          "discovery_choice_ble": "Re-pair it over Bluetooth (get a fresh auth token)"
+        }
+      },
+      "ble_pairing_code": {
+        "title": "Enter the pairing code",
+        "description": "Enter the pairing code printed on {label_id}'s physical label. This pairs it as a new device and mints a new auth token — only do this for a strip that isn't already set up in Home Assistant.",
+        "data": {
+          "pairing_code": "Pairing code"
+        }
+      },
+      "ble_pair": {
+        "title": "Pairing…"
+      },
+      "thread_creds_source": {
+        "title": "Join your Thread network",
+        "menu_options": {
+          "use_ha_dataset": "Use Home Assistant's Thread network",
+          "manual_thread_creds": "Enter Thread network details manually"
+        }
+      },
+      "manual_thread_creds": {
+        "title": "Thread network details",
+        "data": {
+          "thread_network_name": "Network name",
+          "thread_channel": "Channel",
+          "thread_panid": "PAN ID (hex)",
+          "thread_extpanid": "Extended PAN ID (hex)",
+          "thread_networkkey": "Network key (hex)"
+        }
+      },
+      "ble_push_creds": {
+        "title": "Joining your Thread network…"
+      }
+    },
+    "progress": {
+      "ble_pairing": "Pairing with the strip over Bluetooth…",
+      "joining_thread": "Sending your Thread network credentials to the strip…"
+    },
+    "abort": {
+      "already_configured": "This strip is already configured.",
+      "ble_onboarding_complete": "{label_id} was paired and sent your Thread network credentials. It should appear automatically within a minute or two once it joins the mesh.",
+      "no_thread_dataset_available": "Home Assistant doesn't have an active Thread network dataset available. Try entering the network details manually instead."
+    },
+    "error": {
+      "cannot_connect": "Could not connect — check the address, port, and auth token.",
+      "no_devices_found": "No factory-reset strips found nearby. Make sure it's powered on and hasn't already been paired.",
+      "ble_pairing_failed": "Pairing failed — double check the pairing code and try again.",
+      "ble_connection_failed": "Couldn't establish a Bluetooth connection to the strip. Make sure it's powered on and in range, then try again.",
+      "thread_credentials_rejected": "The strip rejected the Thread network credentials.",
+      "invalid_thread_credentials": "Those Thread network details don't look right — check the PAN ID, extended PAN ID, and network key are valid hex."
+    }
+  }
+}
