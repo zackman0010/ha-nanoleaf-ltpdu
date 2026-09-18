@@ -32,6 +32,14 @@
           "ble_address": "Strip"
         }
       },
+      "discovery_choice": {
+        "title": "How would you like to add {name}?",
+        "description": "This strip was found both on your Thread network and over Bluetooth.",
+        "menu_options": {
+          "discovery_choice_thread": "Use its existing Thread connection (enter its saved auth token)",
+          "discovery_choice_ble": "Re-pair it over Bluetooth (get a fresh auth token)"
+        }
+      },
       "ble_pairing_code": {
         "title": "Enter the pairing code",
         "description": "Enter the pairing code printed on {label_id}'s physical label. This pairs it as a new device and mints a new auth token — only do this for a strip that isn't already set up in Home Assistant.",

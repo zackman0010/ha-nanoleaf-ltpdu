@@ -44,3 +44,12 @@ CONF_THREAD_NETWORKKEY = "thread_networkkey"
 # that fires once the strip joins Thread can skip re-asking for a token it already
 # has. In-memory only, never persisted.
 PENDING_TOKENS_KEY = f"{DOMAIN}_pending_tokens"
+
+# Per-device sightings from each discovery source ("zeroconf"/"ble"), keyed by
+# label_id, so whichever source's flow ends up surviving the unique_id dedup (see
+# async_step_zeroconf / async_step_bluetooth / _async_check_dual_discovery in
+# config_flow.py) can tell whether the OTHER source has also seen this device and
+# offer the user a choice, instead of silently picking whichever source happened to
+# fire first. In-memory only, never persisted; never pruned, but bounded by the
+# number of distinct physical devices ever discovered — negligible.
+DISCOVERY_SIGHTINGS_KEY = f"{DOMAIN}_discovery_sightings"

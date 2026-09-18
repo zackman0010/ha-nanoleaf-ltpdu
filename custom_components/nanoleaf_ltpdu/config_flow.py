@@ -26,6 +26,7 @@ from bleak_retry_connector import BleakClientWithServiceCache, establish_connect
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .const import (
@@ -41,6 +42,7 @@ from .const import (
     CONF_THREAD_NETWORKKEY,
     CONF_THREAD_PANID,
     DEFAULT_PORT,
+    DISCOVERY_SIGHTINGS_KEY,
     DOMAIN,
     LOGGER,
     NANOLEAF_BLE_MANUFACTURER_ID,
@@ -139,6 +141,11 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
         self._ble_push_creds_task: asyncio.Task | None = None
         self._ble_step_error: str | None = None
 
+        # Populated by _async_check_dual_discovery() when both zeroconf and BLE have
+        # sighted the same device — {"zeroconf": {...}, "ble": {...}}. See
+        # async_step_discovery_choice.
+        self._discovery_sightings: dict[str, dict[str, str]] = {}
+
     async def async_remove(self) -> None:
         """Clean up an open BLE connection if the flow is abandoned mid-onboarding."""
         if self._ble_client is not None and self._ble_client.is_connected:
@@ -147,7 +154,13 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_zeroconf(self, discovery_info: ZeroconfServiceInfo) -> ConfigFlowResult:
         instance_name = _instance_name_from_zeroconf_name(discovery_info.name)
         label_id = _label_id_from_zeroconf_name(discovery_info.name)
-        await self.async_set_unique_id(label_id)
+        # raise_on_progress=False: a strip already Thread-joined but not yet added to
+        # HA is discoverable via both this zeroconf service and its still-advertising
+        # LTPDU BLE broadcast (see async_step_bluetooth) — both paths use the same
+        # plain label_id as unique_id. We want the chance to notice that and offer a
+        # choice (_async_check_dual_discovery) rather than have HA's default
+        # raise_on_progress silently abort whichever fires second.
+        await self.async_set_unique_id(label_id, raise_on_progress=False)
         # ZeroconfServiceInfo.ip_address is already the most-recently-updated address
         # that is NOT link-local/unspecified — no manual filtering needed here.
         host = str(discovery_info.ip_address)
@@ -157,20 +170,20 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovered_port = discovery_info.port or DEFAULT_PORT
         self._label_id = label_id
         self._device_name = _correct_display_name_casing(instance_name)
-        # A strip already Thread-joined but not yet added to HA is discoverable via
-        # both this zeroconf service and its still-advertising LTPDU BLE broadcast
-        # (see async_step_bluetooth) — both paths set_unique_id() to the same plain
-        # label_id, so whichever discovery fires second self-aborts as
-        # "already_in_progress" instead of showing a duplicate card. No suffix
-        # needed here to tell them apart.
         self.context["title_placeholders"] = {"name": self._device_name}
 
         # A strip just onboarded via this integration's own BLE flow stashes its
         # freshly-minted token here before its Thread join propagates to mDNS — skip
-        # asking the user for a token they'd have no way to look up themselves.
+        # asking the user for a token they'd have no way to look up themselves, and
+        # skip the dual-discovery choice below too (we already know how it was added).
         pending_tokens: dict[str, str] = self.hass.data.get(PENDING_TOKENS_KEY, {})
         if label_id in pending_tokens:
             return await self.async_step_zeroconf_confirm({CONF_AUTH_TOKEN: pending_tokens[label_id]})
+
+        if await self._async_check_dual_discovery(
+            label_id, "zeroconf", {"host": host, "port": str(self._discovered_port), "name": self._device_name}
+        ):
+            return await self.async_step_discovery_choice()
         return await self.async_step_zeroconf_confirm()
 
     async def async_step_zeroconf_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -252,10 +265,10 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
 
         Uses the same plain label_id as async_step_zeroconf's unique_id (falling back
         to an address-based one only when the label_id can't be parsed from the
-        advertised name) — async_set_unique_id()'s own raise_on_progress check then
-        automatically aborts whichever of the two discovery sources fires second for
-        the same physical device as "already_in_progress", so a strip that's already
-        Thread-joined but not yet added to HA never gets two separate cards."""
+        advertised name). Rather than letting async_set_unique_id()'s default
+        raise_on_progress silently abort whichever of the two discovery sources fires
+        second for the same physical device, _async_check_dual_discovery notices that
+        case and offers the user an explicit choice instead — see its docstring."""
         self._ble_address = discovery_info.address
         self._label_id = _label_id_from_ble_name(discovery_info.name)
 
@@ -264,12 +277,93 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
                 if entry.data.get(CONF_LABEL_ID) == self._label_id:
                     return self.async_abort(reason="already_configured")
 
-        await self.async_set_unique_id(self._label_id or f"ble_onboarding_{discovery_info.address}")
+        unique_id = self._label_id or f"ble_onboarding_{discovery_info.address}"
+        await self.async_set_unique_id(unique_id, raise_on_progress=False)
         self._abort_if_unique_id_configured()
         display_name = (
             _correct_display_name_casing(discovery_info.name) if discovery_info.name else discovery_info.address
         )
         self.context["title_placeholders"] = {"name": display_name}
+
+        # Only a label_id-keyed unique_id can collide with a zeroconf sighting of the
+        # same physical device — the address-fallback ID (used when the label_id
+        # couldn't be parsed from the advertised name) never matches anything zeroconf
+        # sets, so there's nothing to offer a choice between.
+        if self._label_id is not None and await self._async_check_dual_discovery(
+            self._label_id, "ble", {"address": discovery_info.address, "name": display_name}
+        ):
+            return await self.async_step_discovery_choice()
+        return await self.async_step_ble_pairing_code()
+
+    async def _async_check_dual_discovery(self, label_id: str, source: str, sighting: dict[str, str]) -> bool:
+        """Record this discovery source's sighting of label_id, and detect whether
+        the OTHER source (zeroconf vs. BLE) has already sighted the same physical
+        device via a still-in-progress sibling flow.
+
+        Returns False when this is the only/first sighting so far — the caller should
+        proceed with its own normal single-path flow, unchanged from before this
+        feature existed. Returns True when a sibling flow from the OTHER source is
+        already showing its own card — that sibling is aborted here (this flow takes
+        over as the sole survivor) and self._discovery_sightings is populated for
+        async_step_discovery_choice to read from.
+
+        Also handles the case that matters for correctness, not just UX: a sibling
+        flow already in progress from THIS SAME source (e.g. zeroconf re-announcing
+        while its own flow is still up) must still self-abort exactly like
+        async_set_unique_id's own raise_on_progress would have — otherwise disabling
+        raise_on_progress here (needed so BOTH sources get a chance to reach this
+        logic at all) would let genuine duplicate discovery events of the same source
+        each spawn their own separate card.
+
+        Ordering note: whichever source discovers the device LAST is the one that
+        ends up showing the chooser (it's the one that can see both sightings) —
+        this resolves correctly regardless of which source happens to fire first.
+        If only one source ever fires, this never triggers and nothing changes."""
+        all_sightings: dict[str, dict[str, dict[str, str]]] = self.hass.data.setdefault(DISCOVERY_SIGHTINGS_KEY, {})
+        sightings_for_device = all_sightings.setdefault(label_id, {})
+
+        sibling_flow_ids = [
+            progress["flow_id"]
+            for progress in self.hass.config_entries.flow.async_progress_by_handler(
+                DOMAIN, include_uninitialized=True, match_context={"unique_id": label_id}
+            )
+            if progress["flow_id"] != self.flow_id
+        ]
+        already_seen_by_this_source = source in sightings_for_device
+        sightings_for_device[source] = sighting
+
+        if not sibling_flow_ids:
+            return False
+
+        if already_seen_by_this_source:
+            raise AbortFlow("already_in_progress")
+
+        for flow_id in sibling_flow_ids:
+            self.hass.config_entries.flow.async_abort(flow_id)
+        self._discovery_sightings = sightings_for_device
+        return True
+
+    async def async_step_discovery_choice(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Shown only when _async_check_dual_discovery found the device via both
+        zeroconf and BLE. Each menu option sources its data from
+        self._discovery_sightings rather than assuming which of self._discovered_host
+        / self._ble_address this particular flow instance already has set — this flow
+        may have originated from EITHER discovery source (whichever fired last)."""
+        return self.async_show_menu(
+            step_id="discovery_choice",
+            menu_options=["discovery_choice_thread", "discovery_choice_ble"],
+        )
+
+    async def async_step_discovery_choice_thread(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        sighting = self._discovery_sightings["zeroconf"]
+        self._discovered_host = sighting["host"]
+        self._discovered_port = int(sighting["port"])
+        self._device_name = sighting["name"]
+        return await self.async_step_zeroconf_confirm()
+
+    async def async_step_discovery_choice_ble(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        sighting = self._discovery_sightings["ble"]
+        self._ble_address = sighting["address"]
         return await self.async_step_ble_pairing_code()
 
     async def async_step_ble_scan(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:

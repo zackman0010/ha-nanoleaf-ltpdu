@@ -5,9 +5,10 @@ network. Config flow instances are driven directly (constructed + `.hass` set, s
 methods called and awaited manually, including manually re-invoking a progress step a
 second time to simulate what HA's real FlowManager does once the background task
 completes) rather than through the full `hass.config_entries.flow.async_init(...)`
-machinery — this works fine for a directly-constructed flow instance (no
-`flow_id`/`handler` needed for anything this file checks). See test_coordinator.py's
-module docstring for why not the full pytest_homeassistant_custom_component fixture.
+machinery — this works fine for a directly-constructed flow instance (`flow_id` is
+set to a fixed stub value by _make_flow; `handler` isn't needed for anything this
+file checks). See test_coordinator.py's module docstring for why not the full
+pytest_homeassistant_custom_component fixture.
 """
 from __future__ import annotations
 
@@ -51,6 +52,10 @@ def _make_flow(hass: HomeAssistant) -> cf.NanoleafLtpduConfigFlow:
     # self.context in a step (e.g. title_placeholders) can't leak into other tests via
     # the shared class attribute.
     flow.context = {}
+    # Default: no other config entries, no sibling flows in progress. Tests that care
+    # (already-configured checks, dual-discovery merge) override this afterward.
+    flow.hass.config_entries = _FakeConfigEntries([])
+    flow.flow_id = "test-flow-id"
     return flow
 
 
@@ -360,9 +365,31 @@ class _FakeConfigEntry:
         self.data = {CONF_LABEL_ID: label_id}
 
 
+class _FakeFlowManager:
+    """Fakes the bits of hass.config_entries.flow that _async_check_dual_discovery
+    needs. `progress` is a list of partial-FlowResult-shaped dicts
+    ({"flow_id", "context"}) representing other in-progress flows — tests that
+    exercise the dual-discovery merge populate this to simulate a sibling flow."""
+
+    def __init__(self, progress: list[dict] | None = None) -> None:
+        self.progress = progress or []
+        self.aborted_flow_ids: list[str] = []
+
+    def async_progress_by_handler(
+        self, handler: str, include_uninitialized: bool = False, match_context: dict | None = None
+    ) -> list[dict]:
+        if match_context is None:
+            return list(self.progress)
+        return [p for p in self.progress if match_context.items() <= p.get("context", {}).items()]
+
+    def async_abort(self, flow_id: str) -> None:
+        self.aborted_flow_ids.append(flow_id)
+
+
 class _FakeConfigEntries:
-    def __init__(self, entries: list[_FakeConfigEntry]) -> None:
+    def __init__(self, entries: list[_FakeConfigEntry], flow: "_FakeFlowManager | None" = None) -> None:
         self._entries = entries
+        self.flow = flow or _FakeFlowManager()
 
     def async_entries(self, domain: str) -> list[_FakeConfigEntry]:
         return self._entries
@@ -416,8 +443,8 @@ async def test_bluetooth_and_zeroconf_use_the_same_unique_id_for_the_same_device
     ):
         await bluetooth_flow.async_step_bluetooth(discovery_info)
 
-    mock_zc_id.assert_awaited_once_with("AB12")
-    mock_ble_id.assert_awaited_once_with("AB12")
+    mock_zc_id.assert_awaited_once_with("AB12", raise_on_progress=False)
+    mock_ble_id.assert_awaited_once_with("AB12", raise_on_progress=False)
 
 
 async def test_bluetooth_discovery_aborts_when_strip_already_configured(hass: HomeAssistant) -> None:
@@ -466,3 +493,128 @@ async def test_zeroconf_with_pending_token_skips_the_form(hass: HomeAssistant) -
     assert result["type"].value == "create_entry"
     assert result["data"][CONF_AUTH_TOKEN] == "deadbeefcafebabe"
     assert "3ZP3" not in hass.data[PENDING_TOKENS_KEY]  # consumed
+
+
+# -- Dual discovery (found via both BLE and Thread/zeroconf) -----------------------
+
+
+async def test_dual_discovery_first_sighting_proceeds_normally(hass: HomeAssistant) -> None:
+    """No sibling flow yet — this is either the only sighting, or the first of two.
+    Either way the caller should proceed with its own normal single-path flow."""
+    flow = _make_flow(hass)
+
+    takeover = await flow._async_check_dual_discovery(
+        "AB12", "zeroconf", {"host": "fd12::1", "port": "5683", "name": "SecretLab MagRGB AB12"}
+    )
+
+    assert takeover is False
+    assert hass.data[cf.DISCOVERY_SIGHTINGS_KEY]["AB12"]["zeroconf"]["host"] == "fd12::1"
+
+
+async def test_dual_discovery_second_source_takes_over_and_aborts_sibling(hass: HomeAssistant) -> None:
+    """The core new mechanism: whichever source discovers the device LAST sees the
+    other source's already-recorded sighting via a still-in-progress sibling flow —
+    it must take over as the sole survivor (abort the sibling, report both
+    sightings) rather than creating a duplicate card or losing the earlier one."""
+    hass.data[cf.DISCOVERY_SIGHTINGS_KEY] = {
+        "AB12": {"zeroconf": {"host": "fd12::1", "port": "5683", "name": "SecretLab MagRGB AB12"}}
+    }
+    flow = _make_flow(hass)
+    flow.flow_id = "second-flow-id"
+    sibling_progress = [{"flow_id": "first-flow-id", "context": {"unique_id": "AB12"}}]
+    flow.hass.config_entries = _FakeConfigEntries([], _FakeFlowManager(progress=sibling_progress))
+
+    takeover = await flow._async_check_dual_discovery(
+        "AB12", "ble", {"address": "AA:BB:CC:DD:EE:FF", "name": "SecretLab MagRGB AB12"}
+    )
+
+    assert takeover is True
+    assert flow.hass.config_entries.flow.aborted_flow_ids == ["first-flow-id"]
+    assert flow._discovery_sightings == {
+        "zeroconf": {"host": "fd12::1", "port": "5683", "name": "SecretLab MagRGB AB12"},
+        "ble": {"address": "AA:BB:CC:DD:EE:FF", "name": "SecretLab MagRGB AB12"},
+    }
+
+
+async def test_dual_discovery_same_source_refire_self_aborts(hass: HomeAssistant) -> None:
+    """Regression guard: async_set_unique_id's raise_on_progress is disabled for both
+    discovery entry points specifically so this logic can run at all — that must not
+    let a genuine re-fire of the SAME source (e.g. zeroconf re-announcing while its
+    own flow is still up) spawn a second card. Distinguished from the takeover case
+    above purely by whether THIS source already has a recorded sighting."""
+    hass.data[cf.DISCOVERY_SIGHTINGS_KEY] = {
+        "AB12": {"zeroconf": {"host": "fd12::1", "port": "5683", "name": "SecretLab MagRGB AB12"}}
+    }
+    flow = _make_flow(hass)
+    flow.flow_id = "refire-flow-id"
+    sibling_progress = [{"flow_id": "original-flow-id", "context": {"unique_id": "AB12"}}]
+    flow.hass.config_entries = _FakeConfigEntries([], _FakeFlowManager(progress=sibling_progress))
+
+    with pytest.raises(cf.AbortFlow):
+        await flow._async_check_dual_discovery(
+            "AB12", "zeroconf", {"host": "fd12::2", "port": "5683", "name": "SecretLab MagRGB AB12"}
+        )
+    assert flow.hass.config_entries.flow.aborted_flow_ids == []  # the sibling is untouched, only self aborts
+
+
+async def test_bluetooth_discovery_takes_over_when_zeroconf_already_in_progress(hass: HomeAssistant) -> None:
+    """End-to-end: BLE discovery arriving after zeroconf already has a card up for
+    the same label_id shows the discovery_choice menu instead of a duplicate BLE
+    pairing-code card."""
+    hass.data[cf.DISCOVERY_SIGHTINGS_KEY] = {
+        "AB12": {"zeroconf": {"host": "fd12::1", "port": "5683", "name": "SecretLab MagRGB AB12"}}
+    }
+    flow = _make_flow(hass)
+    flow.flow_id = "ble-flow-id"
+    sibling_progress = [{"flow_id": "zc-flow-id", "context": {"unique_id": "AB12"}}]
+    flow.hass.config_entries = _FakeConfigEntries([], _FakeFlowManager(progress=sibling_progress))
+    discovery_info = _FakeServiceInfo("AA:BB:CC:DD:EE:FF", "Secretlab MAGRGB AB12")
+
+    with patch.object(cf.NanoleafLtpduConfigFlow, "async_set_unique_id", AsyncMock(return_value=None)):
+        result = await flow.async_step_bluetooth(discovery_info)
+
+    assert result["type"].value == "menu"
+    assert result["step_id"] == "discovery_choice"
+    assert flow.hass.config_entries.flow.aborted_flow_ids == ["zc-flow-id"]
+    assert flow._discovery_sightings["ble"]["address"] == "AA:BB:CC:DD:EE:FF"
+
+
+async def test_discovery_choice_thread_uses_stashed_zeroconf_sighting(hass: HomeAssistant) -> None:
+    """Must read from self._discovery_sightings rather than assume self._discovered_*
+    are already set — this flow may have originated from the BLE side, in which case
+    only the stashed sighting has the zeroconf-path data at all."""
+    flow = _make_flow(hass)
+    flow._discovery_sightings = {
+        "zeroconf": {"host": "fd12::1", "port": "5683", "name": "SecretLab MagRGB AB12"},
+        "ble": {"address": "AA:BB:CC:DD:EE:FF", "name": "SecretLab MagRGB AB12"},
+    }
+
+    with patch.object(
+        cf.NanoleafLtpduConfigFlow, "async_step_zeroconf_confirm", AsyncMock(return_value={"stub": True})
+    ) as mock_confirm:
+        result = await flow.async_step_discovery_choice_thread()
+
+    assert result == {"stub": True}
+    mock_confirm.assert_awaited_once_with()
+    assert flow._discovered_host == "fd12::1"
+    assert flow._discovered_port == 5683
+    assert flow._device_name == "SecretLab MagRGB AB12"
+
+
+async def test_discovery_choice_ble_uses_stashed_ble_sighting(hass: HomeAssistant) -> None:
+    """Same as above, mirrored: this flow may have originated from the zeroconf
+    side, in which case only the stashed sighting has the BLE address at all."""
+    flow = _make_flow(hass)
+    flow._discovery_sightings = {
+        "zeroconf": {"host": "fd12::1", "port": "5683", "name": "SecretLab MagRGB AB12"},
+        "ble": {"address": "AA:BB:CC:DD:EE:FF", "name": "SecretLab MagRGB AB12"},
+    }
+
+    with patch.object(
+        cf.NanoleafLtpduConfigFlow, "async_step_ble_pairing_code", AsyncMock(return_value={"stub": True})
+    ) as mock_code:
+        result = await flow.async_step_discovery_choice_ble()
+
+    assert result == {"stub": True}
+    mock_code.assert_awaited_once_with()
+    assert flow._ble_address == "AA:BB:CC:DD:EE:FF"
