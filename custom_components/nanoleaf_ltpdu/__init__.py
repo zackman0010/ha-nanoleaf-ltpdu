@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import voluptuous as vol
+
 from homeassistant.components import panel_custom
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
@@ -26,6 +28,9 @@ PLATFORMS: list[Platform] = [Platform.LIGHT]
 SERVICE_GET_SCENE_CAPABILITIES = "get_scene_capabilities"
 SERVICE_GET_SCENE_LIBRARY = "get_scene_library"
 SERVICE_LIST_STRIPS = "list_strips"
+SERVICE_SAVE_SCENE_TO_LIBRARY = "save_scene_to_library"
+
+SAVE_SCENE_TO_LIBRARY_SCHEMA = vol.Schema({vol.Required("name"): str, **scene_services.SCENE_FIELDS_SCHEMA})
 
 PANEL_FILENAME = "nanoleaf-scene-panel.js"
 PANEL_URL_PATH = f"/{DOMAIN}/{PANEL_FILENAME}"
@@ -99,6 +104,15 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async def _handle_list_strips(call: ServiceCall) -> ServiceResponse:
         return {"strips": _resolve_strips(hass)}
 
+    async def _handle_save_scene_to_library(call: ServiceCall) -> None:
+        """Save a recipe to the shared library with no device involved at all — the
+        scene-editor panel's "Save to: Library" option."""
+        motion_style = call.data["motion_style"]
+        motion_params = call.data["motion_params"]
+        style_id = scene_services.resolve_motion_style(motion_style)
+        scene_services.encode_motion_params(style_id, motion_params)  # validate only; bytes discarded
+        await library.async_save_recipe(call.data["name"], motion_style, motion_params, call.data["colors"])
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_GET_SCENE_CAPABILITIES,
@@ -116,6 +130,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         SERVICE_LIST_STRIPS,
         _handle_list_strips,
         supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SAVE_SCENE_TO_LIBRARY,
+        _handle_save_scene_to_library,
+        schema=SAVE_SCENE_TO_LIBRARY_SCHEMA,
     )
     return True
 

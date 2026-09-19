@@ -20,7 +20,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import services as scene_services
-from .const import CONF_LABEL_ID, DOMAIN, SCENE_LIBRARY_KEY
+from .const import CONF_LABEL_ID, DOMAIN, MAX_ALLOCATABLE_SCENE_ID, MIN_ALLOCATABLE_SCENE_ID, SCENE_LIBRARY_KEY
 from .coordinator import NanoleafLtpduCoordinator
 from .protocol import ci
 from .protocol import device as protocol_device
@@ -32,7 +32,11 @@ SERVICE_DELETE_SCENE = "delete_scene"
 SERVICE_LIST_DEVICE_SCENES = "list_device_scenes"
 
 PREVIEW_SCENE_SCHEMA = scene_services.SCENE_FIELDS_SCHEMA
-SAVE_SCENE_SCHEMA = {vol.Required("name"): str, **scene_services.SCENE_FIELDS_SCHEMA}
+SAVE_SCENE_SCHEMA = {
+    vol.Required("name"): str,
+    vol.Optional("scene_id"): vol.All(int, vol.Range(min=MIN_ALLOCATABLE_SCENE_ID, max=MAX_ALLOCATABLE_SCENE_ID)),
+    **scene_services.SCENE_FIELDS_SCHEMA,
+}
 DELETE_SCENE_SCHEMA = {vol.Required("name"): str}
 
 
@@ -189,10 +193,15 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], LightEntit
         params = scene_services.encode_motion_params(style_id, motion_params)
         await self.coordinator.runtime.preview_scene(style_id, params, scene_services.encode_colors(colors))
 
-    async def async_save_scene(self, name: str, motion_style: str, motion_params: dict, colors: list[dict]) -> ServiceResponse:
+    async def async_save_scene(
+        self, name: str, motion_style: str, motion_params: dict, colors: list[dict], scene_id: int | None = None
+    ) -> ServiceResponse:
         style_id = scene_services.resolve_motion_style(motion_style)
         params = scene_services.encode_motion_params(style_id, motion_params)
-        scene_id = await self.coordinator.async_allocate_scene_id(name)
+        if scene_id is None:
+            scene_id = await self.coordinator.async_allocate_scene_id(name)
+        else:
+            await self.coordinator.async_assign_scene_id(name, scene_id)
         await self.coordinator.runtime.save_scene(scene_id, style_id, params, scene_services.encode_colors(colors))
         # Also record the recipe in the shared library (scene_library.py) as a
         # starting template for future edits/copies.

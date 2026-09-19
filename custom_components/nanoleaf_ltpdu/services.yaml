@@ -7,6 +7,26 @@ get_scene_library:
 list_strips:
   fields: {}
 
+save_scene_to_library:
+  fields:
+    name:
+      required: true
+      selector:
+        text: {}
+    motion_style:
+      required: true
+      selector:
+        select:
+          options: ["fade", "random", "highlight", "flow", "stripes"]
+    motion_params:
+      required: true
+      selector:
+        object: {}
+    colors:
+      required: true
+      selector:
+        object: {}
+
 preview_scene:
   target:
     entity:
@@ -52,6 +72,13 @@ save_scene:
       required: true
       selector:
         object: {}
+    scene_id:
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 249
+          mode: box
 
 delete_scene:
   target:

@@ -19,6 +19,7 @@ export interface SceneCapabilities {
   field_notes: Record<string, string>;
   color_slots: FieldRange;
   color_field_ranges: Record<string, FieldRange>;
+  scene_id_range: FieldRange; // valid explicit IDs for save_scene's optional scene_id
 }
 
 export interface SceneColor {
@@ -43,6 +44,18 @@ export interface StripInfo {
 
 export interface StripsResponse {
   strips: Record<string, StripInfo>; // keyed by entity_id
+}
+
+export interface DeviceScene {
+  name: string | null; // null when the strip has a scene at this ID this integration has no registered name for
+  motion_style: string; // lowercase
+  motion_params: Record<string, number>;
+  colors: SceneColor[];
+}
+
+export interface DeviceScenesResponse {
+  scenes: Record<string, DeviceScene>; // keyed by scene ID (as a string)
+  current_scene_id: number | null;
 }
 
 const DOMAIN = "nanoleaf_ltpdu";
@@ -74,6 +87,13 @@ export function fetchLibrary(hass: HomeAssistant): Promise<SceneLibraryResponse>
 
 export function fetchStrips(hass: HomeAssistant): Promise<StripsResponse> {
   return callServiceWithResponse<StripsResponse>(hass, "list_strips");
+}
+
+// Reads every scene actually stored on the strip's own flash (an LTPDU round trip per
+// scene) rather than the locally-known name registry — see light.py's
+// async_list_device_scenes.
+export function fetchDeviceScenes(hass: HomeAssistant, entityId: string): Promise<DeviceScenesResponse> {
+  return callServiceWithResponse<DeviceScenesResponse>(hass, "list_device_scenes", {}, { entity_id: entityId });
 }
 
 /** get_scene_capabilities' field_ranges is global/flat across every motion style —

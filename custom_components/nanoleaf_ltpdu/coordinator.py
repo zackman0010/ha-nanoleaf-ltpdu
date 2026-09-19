@@ -135,6 +135,25 @@ class NanoleafLtpduCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.scenes[name] = scene_id
         return scene_id
 
+    async def async_assign_scene_id(self, name: str, scene_id: int) -> None:
+        """Assign an explicit scene ID to `name`, enforcing the same one-name-per-id
+        invariant async_allocate_scene_id maintains for auto-allocated ones. If another
+        name currently holds `scene_id`, it's evicted from the registry (its data stays
+        on the strip's own flash untouched — just no longer reachable by name)."""
+        if name in RESERVED_SCENE_NAMES.values():
+            raise ValueError(f"'{name}' is a reserved factory scene name and cannot be (re)saved")
+        if scene_id in RESERVED_SCENE_NAMES or not MIN_ALLOCATABLE_SCENE_ID <= scene_id <= MAX_ALLOCATABLE_SCENE_ID:
+            raise ValueError(f"scene ID {scene_id} would collide with a reserved factory ID or exceed the allocatable range")
+        scenes = self._scene_registry_data["scenes"]
+        for other_name, other_id in list(scenes.items()):
+            if other_id == scene_id and other_name != name:
+                del scenes[other_name]
+                self.scenes.pop(other_name, None)
+        scenes[name] = scene_id
+        self._scene_registry_data["next_id"] = max(self._scene_registry_data["next_id"], scene_id + 1)
+        await self._scene_store.async_save(self._scene_registry_data)
+        self.scenes[name] = scene_id
+
     async def async_delete_scene(self, name: str) -> None:
         """Deletes on-device first, then the registry mapping — so a failed device
         delete doesn't leave the registry forgetting a scene that's still on the strip."""

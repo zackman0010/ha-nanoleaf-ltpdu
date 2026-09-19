@@ -15,6 +15,7 @@ from typing import Any
 
 import voluptuous as vol
 
+from .const import MAX_ALLOCATABLE_SCENE_ID, MIN_ALLOCATABLE_SCENE_ID
 from .protocol import ci
 
 # Field order per motion style (ci.py: "Speed -> Delay -> Direction -> Loop -> unique
@@ -114,4 +115,5 @@ def get_scene_capabilities() -> dict[str, Any]:
         "field_notes": {"speed": "inverted — lower value is faster, 0x01 (0.1s) is fastest, 0xFF (25.5s) is slowest"},
         "color_slots": {"min": 1, "max": 7},
         "color_field_ranges": {"hue": {"min": 0, "max": 360}, "saturation": {"min": 0, "max": 100}, "brightness": {"min": 0, "max": 100}},
+        "scene_id_range": {"min": MIN_ALLOCATABLE_SCENE_ID, "max": MAX_ALLOCATABLE_SCENE_ID},
     }

@@ -190,6 +190,63 @@ async def test_scene_registry_reserved_and_allocated_ids(hass: HomeAssistant, co
         await coordinator.async_allocate_scene_id("Northern Lights")  # reserved, not (re)savable either
 
 
+async def test_assign_scene_id_explicit_id(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
+    coordinator = NanoleafLtpduCoordinator(hass, config_entry)
+    fake = _FakeDevice()
+    coordinator.runtime = NanoleafLtpduRuntime(hass, fake)  # type: ignore[arg-type]
+    await coordinator.async_load_scene_registry()
+
+    await coordinator.async_assign_scene_id("Sunset", 7)
+    assert coordinator.scenes["Sunset"] == 7
+
+    # A later auto-allocation must not collide with a manually-assigned id.
+    next_id = await coordinator.async_allocate_scene_id("Ocean")
+    assert next_id == 8
+
+
+async def test_assign_scene_id_evicts_other_name_holding_that_id(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
+    coordinator = NanoleafLtpduCoordinator(hass, config_entry)
+    fake = _FakeDevice()
+    coordinator.runtime = NanoleafLtpduRuntime(hass, fake)  # type: ignore[arg-type]
+    await coordinator.async_load_scene_registry()
+    await coordinator.async_assign_scene_id("Ocean", 7)
+
+    await coordinator.async_assign_scene_id("Sunset", 7)
+
+    assert coordinator.scenes["Sunset"] == 7
+    assert "Ocean" not in coordinator.scenes  # evicted from the registry, not deleted on-device
+    assert fake.deleted_scene_ids == []
+
+
+async def test_assign_scene_id_reassigning_same_name_moves_it(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
+    coordinator = NanoleafLtpduCoordinator(hass, config_entry)
+    fake = _FakeDevice()
+    coordinator.runtime = NanoleafLtpduRuntime(hass, fake)  # type: ignore[arg-type]
+    await coordinator.async_load_scene_registry()
+    await coordinator.async_assign_scene_id("Sunset", 3)
+
+    await coordinator.async_assign_scene_id("Sunset", 7)
+
+    assert coordinator.scenes["Sunset"] == 7
+    assert list(coordinator.scenes.values()).count(7) == 1
+
+
+async def test_assign_scene_id_rejects_reserved_id_and_out_of_range(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
+    coordinator = NanoleafLtpduCoordinator(hass, config_entry)
+    fake = _FakeDevice()
+    coordinator.runtime = NanoleafLtpduRuntime(hass, fake)  # type: ignore[arg-type]
+    await coordinator.async_load_scene_registry()
+
+    with pytest.raises(ValueError):
+        await coordinator.async_assign_scene_id("Sunset", next(iter(RESERVED_SCENE_NAMES)))
+    with pytest.raises(ValueError):
+        await coordinator.async_assign_scene_id("Sunset", 0)
+    with pytest.raises(ValueError):
+        await coordinator.async_assign_scene_id("Sunset", 250)
+    with pytest.raises(ValueError):
+        await coordinator.async_assign_scene_id("Northern Lights", 5)  # reserved name, not (re)savable
+
+
 async def test_scene_delete_leaves_registry_intact_if_device_delete_fails(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:

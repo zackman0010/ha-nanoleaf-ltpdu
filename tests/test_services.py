@@ -34,6 +34,7 @@ def test_get_scene_capabilities_matches_ci_verbatim() -> None:
     for fields in scene_services.MOTION_PARAM_FIELDS.values():
         for field in fields:
             assert field in caps["field_ranges"]
+    assert caps["scene_id_range"] == {"min": 1, "max": 249}
 
 
 def test_resolve_motion_style_case_insensitive_and_rejects_unknown() -> None:
@@ -97,12 +98,17 @@ class _FakeCoordinator:
         self.runtime = _FakeRuntime()
         self._next_id = 1
         self._names: dict[str, int] = {}
+        self.assigned_ids: list[tuple[str, int]] = []
 
     async def async_allocate_scene_id(self, name: str) -> int:
         if name not in self._names:
             self._names[name] = self._next_id
             self._next_id += 1
         return self._names[name]
+
+    async def async_assign_scene_id(self, name: str, scene_id: int) -> None:
+        self.assigned_ids.append((name, scene_id))
+        self._names[name] = scene_id
 
 
 class _FakeSceneLibrary:
@@ -142,3 +148,23 @@ async def test_light_save_scene_allocates_id_and_dispatches_byte_exact_params() 
 
     # Also recorded in the shared scene library — see scene_library.py.
     assert scene_library.saved_recipes == [("Sunset", "fade", motion_params, colors)]
+
+
+async def test_light_save_scene_with_explicit_scene_id_skips_allocation() -> None:
+    entry = MockConfigEntry(domain=DOMAIN, unique_id="AB12", data={CONF_LABEL_ID: "AB12", CONF_HOST: "::1", CONF_AUTH_TOKEN: "00"})
+    coordinator = _FakeCoordinator()
+    scene_library = _FakeSceneLibrary()
+    light = NanoleafLtpduLight.__new__(NanoleafLtpduLight)
+    light.coordinator = coordinator  # type: ignore[assignment]
+    light.hass = _FakeHass(scene_library)  # type: ignore[assignment]
+
+    motion_params = {"speed": 0x18, "delay": 0x00, "loop": 0x01}
+    colors = [{"hue": h, "saturation": s, "brightness": b} for h, s, b in HSB_TEST_COLORS]
+    response = await light.async_save_scene(
+        name="Sunset", motion_style="fade", motion_params=motion_params, colors=colors, scene_id=42
+    )
+
+    assert response == {"scene_id": 42}
+    assert coordinator.assigned_ids == [("Sunset", 42)]
+    (scene_id, *_rest) = coordinator.runtime.calls[0]
+    assert scene_id == 42
