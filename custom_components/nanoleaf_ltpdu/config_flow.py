@@ -26,6 +26,7 @@ from bleak_retry_connector import BleakClientWithServiceCache, establish_connect
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
@@ -146,10 +147,20 @@ class NanoleafLtpduConfigFlow(ConfigFlow, domain=DOMAIN):
         # async_step_discovery_choice.
         self._discovery_sightings: dict[str, dict[str, str]] = {}
 
-    async def async_remove(self) -> None:
-        """Clean up an open BLE connection if the flow is abandoned mid-onboarding."""
+    @callback
+    def async_remove(self) -> None:
+        """Clean up an open BLE connection if the flow is abandoned mid-onboarding.
+
+        The base FlowHandler.async_remove is a plain (non-async) @callback, called
+        synchronously by the flow manager with no await — defining this as `async def`
+        meant the disconnect never actually happened (the coroutine object was
+        created and immediately discarded, logged as "was never awaited") — so the
+        actual disconnect has to be scheduled as a task instead of awaited directly.
+        """
         if self._ble_client is not None and self._ble_client.is_connected:
-            await self._ble_client.disconnect()
+            self.hass.async_create_background_task(
+                self._ble_client.disconnect(), f"{DOMAIN} config flow BLE cleanup"
+            )
 
     async def async_step_zeroconf(self, discovery_info: ZeroconfServiceInfo) -> ConfigFlowResult:
         instance_name = _instance_name_from_zeroconf_name(discovery_info.name)

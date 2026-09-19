@@ -55,6 +55,7 @@ class _FakeCoordinator:
         self.scenes = scenes or {"Northern Lights": 0xFA}
         self.runtime = _FakeRuntime()
         self.refresh_calls = 0
+        self.deleted_names: list[str] = []
 
     def async_add_listener(self, update_callback, context=None):
         return lambda: None
@@ -64,6 +65,10 @@ class _FakeCoordinator:
 
     async def async_assign_scene_id(self, name: str, scene_id: int) -> None:
         self.scenes[name] = scene_id
+
+    async def async_delete_scene(self, name: str) -> None:
+        self.deleted_names.append(name)
+        self.scenes.pop(name, None)
 
 
 def _make_light(
@@ -243,6 +248,26 @@ async def test_turn_off_calls_set_power_false() -> None:
     light = _make_light([])
     await light.async_turn_off()
     assert light.coordinator.runtime.calls == [("set_power", (False,))]
+
+
+# -- async_delete_scene: delegates to the coordinator, then pushes state so the
+# entity's effect_list (read from coordinator.scenes) reflects the deletion
+# immediately rather than waiting for the next poll ---------------------------------
+
+async def test_delete_scene_delegates_and_writes_state() -> None:
+    light = _make_light([], scenes={"Northern Lights": 0xFA, "Sunset": 1})
+    write_calls = 0
+
+    def _count_write() -> None:
+        nonlocal write_calls
+        write_calls += 1
+
+    light.async_write_ha_state = _count_write  # type: ignore[method-assign]
+
+    await light.async_delete_scene("Sunset")
+
+    assert light.coordinator.deleted_names == ["Sunset"]
+    assert write_calls == 1
 
 
 # -- list_device_scenes: reads directly off the device (ci ListScene + GetScene),

@@ -12,6 +12,7 @@ pytest_homeassistant_custom_component fixture.
 """
 from __future__ import annotations
 
+import asyncio
 import tempfile
 from unittest.mock import AsyncMock, patch
 
@@ -305,6 +306,28 @@ async def test_ble_onboarding_done_stashes_token_and_disconnects(hass: HomeAssis
     assert result["reason"] == "ble_onboarding_complete"
     assert hass.data[PENDING_TOKENS_KEY]["3ZP3"] == "deadbeef"
     fake_client.disconnect.assert_awaited_once()
+
+
+async def test_async_remove_disconnects_lingering_ble_client(hass: HomeAssistant) -> None:
+    """HA's real FlowManager calls async_remove() synchronously, never awaited (it's
+    a plain @callback on the base FlowHandler) — an `async def` override here would
+    silently never run its cleanup, just log "coroutine was never awaited". Must stay
+    a synchronous @callback that schedules the actual disconnect as a task."""
+    flow = _make_flow(hass)
+    fake_client = _FakeBleakClient()
+    flow._ble_client = fake_client
+
+    result = flow.async_remove()
+
+    assert result is None  # synchronous — not a coroutine object
+    await asyncio.sleep(0)  # let the scheduled task run
+    fake_client.disconnect.assert_awaited_once()
+
+
+async def test_async_remove_is_a_noop_with_no_ble_client(hass: HomeAssistant) -> None:
+    flow = _make_flow(hass)
+
+    flow.async_remove()  # must not raise
 
 
 def test_correct_display_name_casing_fixes_only_the_magrgb_brand_words() -> None:

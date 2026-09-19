@@ -207,10 +207,17 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], LightEntit
         # starting template for future edits/copies.
         library = self.hass.data[SCENE_LIBRARY_KEY]
         await library.async_save_recipe(name, motion_style, motion_params, colors)
+        # effect_list is read straight from coordinator.scenes (see that property
+        # below) — push a state update now so the new scene shows up as a
+        # selectable Effect immediately, rather than waiting for the next poll.
+        self.async_write_ha_state()
         return {"scene_id": scene_id}
 
     async def async_delete_scene(self, name: str) -> None:
         await self.coordinator.async_delete_scene(name)
+        # Same reasoning as async_save_scene: without this, a deleted scene would
+        # keep appearing in the Effect list until the next poll.
+        self.async_write_ha_state()
 
     async def async_list_device_scenes(self) -> ServiceResponse:
         """Reads every scene actually stored on the strip (ci's ListScene +

@@ -134,6 +134,13 @@ async def test_light_save_scene_allocates_id_and_dispatches_byte_exact_params() 
     light = NanoleafLtpduLight.__new__(NanoleafLtpduLight)
     light.coordinator = coordinator  # type: ignore[assignment]
     light.hass = _FakeHass(scene_library)  # type: ignore[assignment]
+    write_calls = 0
+
+    def _count_write() -> None:
+        nonlocal write_calls
+        write_calls += 1
+
+    light.async_write_ha_state = _count_write  # type: ignore[method-assign]
 
     motion_params = {"speed": 0x18, "delay": 0x00, "loop": 0x01}
     colors = [{"hue": h, "saturation": s, "brightness": b} for h, s, b in HSB_TEST_COLORS]
@@ -148,6 +155,9 @@ async def test_light_save_scene_allocates_id_and_dispatches_byte_exact_params() 
 
     # Also recorded in the shared scene library — see scene_library.py.
     assert scene_library.saved_recipes == [("Sunset", "fade", motion_params, colors)]
+    # effect_list just gained a new name — state is pushed immediately rather than
+    # waiting for the next poll.
+    assert write_calls == 1
 
 
 async def test_light_save_scene_with_explicit_scene_id_skips_allocation() -> None:
@@ -157,6 +167,7 @@ async def test_light_save_scene_with_explicit_scene_id_skips_allocation() -> Non
     light = NanoleafLtpduLight.__new__(NanoleafLtpduLight)
     light.coordinator = coordinator  # type: ignore[assignment]
     light.hass = _FakeHass(scene_library)  # type: ignore[assignment]
+    light.async_write_ha_state = lambda: None  # type: ignore[method-assign]
 
     motion_params = {"speed": 0x18, "delay": 0x00, "loop": 0x01}
     colors = [{"hue": h, "saturation": s, "brightness": b} for h, s, b in HSB_TEST_COLORS]
