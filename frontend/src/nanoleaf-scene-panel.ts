@@ -7,6 +7,7 @@ import { customElement, state } from "lit/decorators.js";
 import { createRef, ref, type Ref } from "lit/directives/ref.js";
 
 import { fetchStrips, type StripsResponse } from "./capabilities";
+import { describeError } from "./errors";
 import type { HomeAssistant } from "./ha-types";
 import "./nanoleaf-scene-card";
 import type { NanoleafSceneCard } from "./nanoleaf-scene-card";
@@ -47,7 +48,7 @@ export class NanoleafScenePanel extends LitElement {
         this._selected = ids[0];
       }
     } catch (err) {
-      this._loadError = err instanceof Error ? err.message : String(err);
+      this._loadError = describeError(err);
     }
   }
 

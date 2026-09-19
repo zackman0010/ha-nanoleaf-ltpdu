@@ -63,11 +63,15 @@ async def _async_register_scene_panel(hass: HomeAssistant) -> None:
 def _resolve_strips(hass: HomeAssistant) -> dict[str, dict[str, str]]:
     """Every config entry's light entity_id + display name, for the scene-editor
     panel's strip picker. An entry whose entity hasn't been registered yet (still
-    setting up) is simply omitted."""
+    setting up), or that has no label_id at all (e.g. an ignored discovery — its
+    data is `{}`), is simply omitted."""
     registry = er.async_get(hass)
     strips: dict[str, dict[str, str]] = {}
     for entry in hass.config_entries.async_entries(DOMAIN):
-        entity_id = registry.async_get_entity_id("light", DOMAIN, entry.data[CONF_LABEL_ID])
+        label_id = entry.data.get(CONF_LABEL_ID)
+        if label_id is None:
+            continue
+        entity_id = registry.async_get_entity_id("light", DOMAIN, label_id)
         if entity_id is not None:
             strips[entity_id] = {"name": entry.title}
     return strips

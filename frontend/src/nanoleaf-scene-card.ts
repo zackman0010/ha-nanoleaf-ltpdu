@@ -16,6 +16,7 @@ import {
   type SceneLibraryResponse,
 } from "./capabilities";
 import { hexToHsb, hsbToHex } from "./color";
+import { describeError } from "./errors";
 import type { HomeAssistant, LovelaceCardConfig } from "./ha-types";
 import "./motion-preview";
 
@@ -120,7 +121,7 @@ export class NanoleafSceneCard extends LitElement {
       this._library = library;
       this._resetEditor();
     } catch (err) {
-      this._loadError = err instanceof Error ? err.message : String(err);
+      this._loadError = describeError(err);
     }
   }
 
@@ -229,7 +230,7 @@ export class NanoleafSceneCard extends LitElement {
       );
       this._previewError = undefined;
     } catch (err) {
-      this._previewError = err instanceof Error ? err.message : String(err);
+      this._previewError = describeError(err);
     }
   }
 
@@ -257,7 +258,7 @@ export class NanoleafSceneCard extends LitElement {
       this._preSnapshot = undefined;
       this._previewError = undefined;
     } catch (err) {
-      this._previewError = err instanceof Error ? err.message : String(err);
+      this._previewError = describeError(err);
     }
   }
 
@@ -299,7 +300,7 @@ export class NanoleafSceneCard extends LitElement {
         },
       };
     } catch (err) {
-      this._saveError = err instanceof Error ? err.message : String(err);
+      this._saveError = describeError(err);
     } finally {
       this._saving = false;
     }
@@ -326,7 +327,7 @@ export class NanoleafSceneCard extends LitElement {
       restored.delete(name);
       this._locallyDeleted = restored;
       this._locallySaved = savedRestore;
-      this._loadError = err instanceof Error ? err.message : String(err);
+      this._loadError = describeError(err);
     }
   }
 

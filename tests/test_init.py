@@ -28,8 +28,10 @@ async def hass():
 
 
 class _FakeConfigEntry:
-    def __init__(self, label_id: str, title: str) -> None:
-        self.data = {CONF_LABEL_ID: label_id}
+    def __init__(self, label_id: str | None, title: str) -> None:
+        # An ignored discovery (e.g. a device already set up via a different
+        # integration) is a real config entry with empty data — no label_id.
+        self.data = {CONF_LABEL_ID: label_id} if label_id is not None else {}
         self.title = title
 
 
@@ -82,3 +84,13 @@ def test_resolve_strips_omits_entry_with_no_registered_entity(hass: HomeAssistan
 
 def test_resolve_strips_empty_when_no_config_entries(hass: HomeAssistant) -> None:
     assert _resolve_with(hass, [], {}) == {}
+
+
+def test_resolve_strips_skips_ignored_entry_with_no_label_id(hass: HomeAssistant) -> None:
+    entries = [
+        _FakeConfigEntry(None, "A19 Bulb (ignored)"),
+        _FakeConfigEntry("4SZ5", "SecretLab MagRGB 4SZ5"),
+    ]
+    strips = _resolve_with(hass, entries, {"4SZ5": "light.4sz5"})
+
+    assert strips == {"light.4sz5": {"name": "SecretLab MagRGB 4SZ5"}}
