@@ -62,6 +62,9 @@ class _FakeCoordinator:
     async def async_request_refresh(self) -> None:
         self.refresh_calls += 1
 
+    async def async_assign_scene_id(self, name: str, scene_id: int) -> None:
+        self.scenes[name] = scene_id
+
 
 def _make_light(
     records: list[dict],
@@ -253,6 +256,13 @@ async def test_list_device_scenes_reads_from_device_and_resolves_known_names() -
         1: (0x01, bytes.fromhex("0e0001"), [(0, 96, 73)]),
         0xFB: (0x01, bytes.fromhex("0e0001"), [(1, 96, 73)]),
     }
+    write_calls = 0
+
+    def _count_write() -> None:
+        nonlocal write_calls
+        write_calls += 1
+
+    light.async_write_ha_state = _count_write  # type: ignore[method-assign]
 
     response = await light.async_list_device_scenes()
 
@@ -263,6 +273,31 @@ async def test_list_device_scenes_reads_from_device_and_resolves_known_names() -
     assert scenes["250"]["motion_params"] == {"speed": 0x14, "direction": 0x00, "segment": 0x14}
     assert scenes["250"]["colors"] == [{"hue": 227, "saturation": 100, "brightness": 100}]
     assert scenes["1"]["name"] == "Sunset"
-    # An unregistered scene ID (e.g. saved by another client) still comes back, just
-    # with no resolved name.
-    assert scenes["251"]["name"] is None
+    # An unregistered scene ID (e.g. saved by another client) is given a generic name
+    # and registered on the spot, so it's visible on future loads without another
+    # refresh.
+    assert scenes["251"]["name"] == "Unknown Scene 251"
+    assert light.coordinator.scenes["Unknown Scene 251"] == 251
+    # effect_list (read from coordinator.scenes) just changed — state is pushed
+    # immediately rather than waiting for the next poll.
+    assert write_calls == 1
+
+
+async def test_list_device_scenes_does_not_write_state_when_nothing_new_found() -> None:
+    light = _make_light([], scenes={"Northern Lights": 0xFA, "Sunset": 1}, current_scene_id=1)
+    light.coordinator.runtime.scene_ids = [0xFA, 1]
+    light.coordinator.runtime.scene_defs = {
+        0xFA: (0x06, bytes.fromhex("140014"), [(227, 100, 100)]),
+        1: (0x01, bytes.fromhex("0e0001"), [(0, 96, 73)]),
+    }
+    write_calls = 0
+
+    def _count_write() -> None:
+        nonlocal write_calls
+        write_calls += 1
+
+    light.async_write_ha_state = _count_write  # type: ignore[method-assign]
+
+    await light.async_list_device_scenes()
+
+    assert write_calls == 0

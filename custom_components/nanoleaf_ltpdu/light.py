@@ -215,15 +215,33 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], LightEntit
     async def async_list_device_scenes(self) -> ServiceResponse:
         """Reads every scene actually stored on the strip (ci's ListScene +
         GetScene), not from the local name registry — sees scenes the registry
-        doesn't know about (unnamed presets, scenes saved by another client)."""
+        doesn't know about (unnamed presets, scenes saved by another client). Any
+        such scene is registered under a generic name on the spot: a scene ID the
+        strip actually holds is a fact worth persisting, not just a one-off
+        preview — otherwise it silently reverts to invisible (missing from
+        effect_list) the next time HA restarts or the page reloads, and this
+        service has to be called again to see it."""
         reverse_names = {sid: name for name, sid in self.coordinator.scenes.items()}
         scenes: dict[str, dict[str, Any]] = {}
+        registered_any = False
         for scene_id in await self.coordinator.runtime.list_scenes():
             style_id, params, colors = await self.coordinator.runtime.get_scene(scene_id)
+            name = reverse_names.get(scene_id)
+            if name is None:
+                name = f"Unknown Scene {scene_id}"
+                await self.coordinator.async_assign_scene_id(name, scene_id)
+                reverse_names[scene_id] = name
+                registered_any = True
             scenes[str(scene_id)] = {
-                "name": reverse_names.get(scene_id),
+                "name": name,
                 "motion_style": ci.MOTIONS.get(style_id, f"0x{style_id:02x}").lower(),
                 "motion_params": scene_services.decode_motion_params(style_id, params),
                 "colors": scene_services.decode_colors(colors),
             }
+        if registered_any:
+            # effect_list is read straight from coordinator.scenes (see that
+            # property below) — push a state update now so HA's own state for this
+            # entity reflects the newly-registered name(s) immediately, rather than
+            # waiting for the next poll.
+            self.async_write_ha_state()
         return {"scenes": scenes, "current_scene_id": self.coordinator.data.get("current_scene_id")}
