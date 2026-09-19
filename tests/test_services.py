@@ -74,7 +74,7 @@ def test_encode_motion_params_rejects_out_of_range_values() -> None:
     with pytest.raises(scene_services.SceneEncodingError):
         scene_services.encode_motion_params(0x01, {"speed": 0x00, "delay": 0x00, "loop": 0x01})  # speed min is 0x01
     with pytest.raises(scene_services.SceneEncodingError):
-        scene_services.encode_motion_params(0x01, {"speed": 0x59, "delay": 0x00, "loop": 0x01})  # speed max is 0x58
+        scene_services.encode_motion_params(0x01, {"speed": 0x100, "delay": 0x00, "loop": 0x01})  # speed max is 0xFF
 
 
 def test_encode_motion_params_rejects_missing_field() -> None:

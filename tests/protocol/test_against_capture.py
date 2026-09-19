@@ -67,9 +67,8 @@ def test_ci_scene_opcodes() -> None:
 
 def test_ci_scene_read_opcodes() -> None:
     # -- ci.py: build_list/build_get/build_delete/build_current request encoding,
-    #    and decode_current/decode_list/decode_get response decoding, all against
-    #    real bytes captured live against hardware this session (device N24250K0A48
-    #    / label "3ZP3") --
+    #    and decode_current/decode_list/decode_get response decoding, against real
+    #    captured bytes --
     check("ci list (bare query)", tlv.build_set("ci", ci.build_list()), "0001000263690002000407030000")
     check("ci get (scene id 0xfa)", tlv.build_set("ci", ci.build_get(0xFA)), "0001000263690002000507040001fa")
     check("ci delete (scene id 0x01)", tlv.build_set("ci", ci.build_delete(0x01)), "000100026369000200050705000101")
@@ -87,10 +86,8 @@ def test_ci_scene_read_opcodes() -> None:
         fail("decode_list: scene ID enumeration mismatch")
     print("ci.decode_list: OK")
 
-    # Northern Lights (id 0xfa), read back live via GetScene -- independently known
-    # real palette (227/182/125/62/31/2/307 degrees, all sat=100/bright=100)
-    # confirms the bit-packed hue<<14|sat<<7|bright color decoding, not just the
-    # header framing.
+    # Northern Lights' real palette confirms the bit-packed color decoding, not
+    # just the header framing.
     style_id, params, colors = ci.decode_get(
         bytes.fromhex("008704001f0105fa0614001402160738f2642db2641f72640fb26407f26400b2644cf264")
     )

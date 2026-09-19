@@ -36,31 +36,13 @@ class DeviceIdentity:
 
 
 def parse_device_info(di_hex: str) -> DeviceIdentity:
-    """Decode the `di` path's raw value, as returned by get_state()/full_state_query().
-
-    Byte-exact verified against real captured ground truth (mitm_capture.jsonl,
-    device N24250K0A48 / label "4SZ5"): a leading reserved byte, then two
-    NUL-terminated ASCII version strings, then the serial number, then the raw
-    8-byte Thread extended address (EUI64) as the LAST 8 bytes of the blob. The
-    serial number decoded this way ("N24250K0A48") independently matches the same
-    device's serial as cached by Nanoleaf Desktop — strong confirmation this is a
-    real serial number field, not a coincidental byte run.
-
-    Only verified against this ONE physical device/model (a Secretlab MagRGB
-    strip) — parses defensively rather than assuming this generalizes: the eui64
-    is read from the fixed-width tail (always 8 bytes — a hard Thread protocol
-    constant, not something this parser has to guess), and everything else comes
-    from splitting the remaining bytes on NUL, so a different serial-number length
-    on another model still parses correctly as long as the same overall shape
-    (reserved byte + 2 version strings + serial + eui64) holds. Fields that can't
-    be parsed come back None rather than raising or guessing.
-
-    Which of the two version strings is "hardware" vs. "firmware" is inferred from
-    their relative order and their X.Y.Z shape — not independently confirmed the
-    way the serial number and eui64 are — but it matches the same two-version
-    shape ("Firmware: 4.1.3" / "Hardware: 4.0.8") a sibling Nanoleaf Essentials
-    device (paired via Matter instead) reports for these exact fields.
-    """
+    """Decode the `di` path's raw value: a reserved byte, two NUL-terminated ASCII
+    version strings (hardware, then firmware — inferred from order/shape, not
+    independently tagged), the serial number, then the raw 8-byte Thread extended
+    address (EUI64) as the last 8 bytes. Only verified against one physical
+    model/unit; parses defensively (fixed-width eui64 tail, everything else split
+    on NUL) so a different serial length elsewhere still works as long as the
+    overall shape holds. Unparseable fields come back None rather than raising."""
     try:
         raw = bytes.fromhex(di_hex.removeprefix("0x"))
     except ValueError:
@@ -202,9 +184,7 @@ class Device:
     def _ci_request(self, payload: bytes) -> bytes:
         """Send a ci sub-command and return the raw response bytes, widened back
         from tlv.describe()'s int/hex-string `value` formatting (see
-        tlv._format_value) -- every real ci response is >2 bytes (a 5-byte header
-        alone), so this always takes the hex-string branch in practice, but handles
-        the 1-2 byte case defensively rather than assuming."""
+        tlv._format_value)."""
         records = self._ltpdu(tlv.build_set("ci", payload))
         raw = tlv.get_value(records, "ci")
         if isinstance(raw, int):

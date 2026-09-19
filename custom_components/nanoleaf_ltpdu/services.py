@@ -27,10 +27,14 @@ MOTION_PARAM_FIELDS: dict[int, list[str]] = {
     0x06: ["speed", "direction", "segment"],  # Stripes
 }
 
-# Ranges (ci.py) — Speed is INVERTED: 0x01=fastest, 0x58(88)=slowest.
+# Ranges (ci.py). Speed is INVERTED: 0x01=fastest(0.1s), 0xFF=slowest(25.5s);
+# Delay isn't inverted: 0x00=none, 0xFF=25.5s. The ceiling is the full byte for
+# both, not the 88 Nanoleaf Desktop's own UI happens to cap out at — that's a bug
+# on Desktop's end, not a firmware limit (see
+# project_magrgb_protocol_reverse_engineering.md for the full story).
 FIELD_RANGES: dict[str, tuple[int, int]] = {
-    "speed": (0x01, 0x58),
-    "delay": (0x00, 0x58),
+    "speed": (0x01, 0xFF),
+    "delay": (0x00, 0xFF),
     "direction": (0x00, 0x01),
     "loop": (0x00, 0x01),
     "segment": (0x00, 0x64),
@@ -107,7 +111,7 @@ def get_scene_capabilities() -> dict[str, Any]:
             for style_id, name in ci.MOTIONS.items()
         },
         "field_ranges": {field: {"min": lo, "max": hi} for field, (lo, hi) in FIELD_RANGES.items()},
-        "field_notes": {"speed": "inverted — lower value is faster, 0x01 is fastest, 0x58 (88) is slowest"},
+        "field_notes": {"speed": "inverted — lower value is faster, 0x01 (0.1s) is fastest, 0xFF (25.5s) is slowest"},
         "color_slots": {"min": 1, "max": 7},
         "color_field_ranges": {"hue": {"min": 0, "max": 360}, "saturation": {"min": 0, "max": 100}, "brightness": {"min": 0, "max": 100}},
     }

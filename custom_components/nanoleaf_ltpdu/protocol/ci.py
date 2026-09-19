@@ -33,8 +33,9 @@ MOTIONS = {
 }
 
 # Ranges (identical across every motion that has the field):
-#   Speed: max=0x01, min=0x58 (88) — INVERTED, low byte = fast
-#   Delay: min=0x00, max=0x58 (88)
+#   Speed: min=0x01 (fastest), max=0xFF (slowest) — INVERTED, low byte = fast.
+#     duration_seconds = raw_byte / 10.
+#   Delay: min=0x00, max=0xFF, not inverted, same /10 scale as Speed.
 #   Segment / First Colour Frequency: min=0x00, max=0x64 (100)
 #   Direction / Loop: 0x00/0x01 toggle
 
@@ -94,12 +95,10 @@ def build_current() -> bytes:
 
 
 # -- decoding responses -----------------------------------------------------------
-#
-# Every ci response shares one header shape, confirmed live against real hardware:
+# Every ci response shares one header:
 #   [status=0x00][flag=0x87][echo_sub][len_hi][len_lo][body, len_hi:len_lo bytes]
-# (build_load()/build_write()/build_save() never had their responses decoded before
-# now — their response is a fixed ack, not an echo, so there was nothing to parse.
-# SUB_LIST/SUB_GET/SUB_CURRENT's responses are genuine data, hence decoders here.)
+# build_load()/build_write()/build_save() get a fixed ack, not an echo, so there's
+# nothing to decode for those.
 
 
 def _response_body(raw: bytes, expected_sub: int) -> bytes:
@@ -123,12 +122,9 @@ def decode_list(raw: bytes) -> list[int]:
 
 
 def _decode_color(b0: int, b1: int, b2: int) -> tuple[int, int, int]:
-    """SUB_GET's palette readback uses a DIFFERENT wire encoding than
-    encode_palette()'s write-side format (hue/4, saturation, brightness as three
-    separate bytes): a single big-endian 24-bit value packing
-    hue<<14 | saturation<<7 | brightness (10/7/7 bits). Verified byte-exact against
-    Northern Lights' independently-known real palette (227/182/125/62/31/2/307
-    degrees, all saturation=100/brightness=100)."""
+    """SUB_GET's palette readback differs from encode_palette()'s write format: one
+    big-endian 24-bit value packing hue<<14 | saturation<<7 | brightness (10/7/7
+    bits), not three separate bytes."""
     value = (b0 << 16) | (b1 << 8) | b2
     hue = value >> 14
     saturation = (value >> 7) & 0x7F
@@ -137,10 +133,8 @@ def _decode_color(b0: int, b1: int, b2: int) -> tuple[int, int, int]:
 
 
 def decode_get(raw: bytes) -> tuple[int, bytes, list[tuple[int, int, int]]]:
-    """Returns (style_id, params, colors) for a stored scene. `colors` uses the
-    SUB_GET-specific decoding (_decode_color), so it is not byte-identical to what
-    build_save() would send for the same colors — only value-equivalent (modulo the
-    hue field's /4 write-side compression, which is lossy)."""
+    """Returns (style_id, params, colors) for a stored scene. `colors` uses
+    _decode_color's format, not build_save()'s write-side encoding."""
     body = _response_body(raw, SUB_GET)
     style_id: int | None = None
     params = b""

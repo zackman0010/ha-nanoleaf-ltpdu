@@ -36,11 +36,9 @@ class NanoleafLtpduRuntime:
     """Async wrapper serializing every call against one Device's one socket/session.
 
     The lock is load-bearing, not incidental: SessionCrypto.process() advances a
-    stateful AES-CTR keystream shared by one Device's one socket and one message-id
-    counter. An overlapping poll-vs-service-call pair — which *will* happen under
-    normal operation (a light card pressed while a 15s poll is mid-flight) — would
-    interleave two _request() round-trips on the same session, desyncing the CTR
-    counter with no visible exception, just silently corrupted decrypts from then on.
+    stateful AES-CTR keystream, so two overlapping requests (e.g. a poll and a
+    service call) would desync it with no visible exception — just silently
+    corrupted decrypts from then on.
     """
 
     def __init__(self, hass: HomeAssistant, dev: protocol_device.Device) -> None:
@@ -138,10 +136,8 @@ class NanoleafLtpduCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return scene_id
 
     async def async_delete_scene(self, name: str) -> None:
-        """Deletes both the on-device scene data (ci's DeleteScene sub-command) and
-        this entry's name->id registry mapping. Device-side delete happens first: if
-        it fails, the registry mapping is left intact rather than forgetting a name
-        for a scene ID that's actually still on the strip."""
+        """Deletes on-device first, then the registry mapping — so a failed device
+        delete doesn't leave the registry forgetting a scene that's still on the strip."""
         if name in RESERVED_SCENE_NAMES.values():
             raise ValueError(f"'{name}' is a reserved factory scene and cannot be deleted")
         scenes = self._scene_registry_data["scenes"]

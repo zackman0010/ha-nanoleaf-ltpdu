@@ -50,23 +50,16 @@ def _coerce_int(value: Any) -> int | None:
 
 
 def _model_from_title(title: str, label_id: str) -> str:
-    """entry.title is always "<model name> <label_id>" (see config_flow.py's
-    _instance_name_from_zeroconf_name / _label_id_from_zeroconf_name, and
-    async_step_manual's f"SecretLab MagRGB {label_id}") — strip the trailing
-    label_id token to get just the model name for DeviceInfo's `model` field.
-    Falls back to the full title if it doesn't end with the expected label_id
-    (e.g. the user renamed the entry in HA after setup)."""
+    """entry.title is always "<model name> <label_id>" — strip the trailing
+    label_id to get just the model name. Falls back to the full title if it
+    doesn't end with label_id (e.g. the user renamed the entry)."""
     prefix, _, suffix = title.rpartition(" ")
     return prefix if suffix == label_id else title
 
 
 def _device_identity_info(records: list[dict]) -> dict[str, str]:
-    """Populate DeviceInfo's serial_number/sw_version/hw_version from the `di` path —
-    already included in every full_state_query() poll (see coordinator.py) but never
-    previously decoded, which is why the Device Info page has been missing this. See
-    protocol.device.parse_device_info's docstring for what's confirmed (serial
-    number, matched independently against Nanoleaf Desktop's own cache) vs. inferred
-    (which version string is "hardware" vs. "firmware"). Only includes fields that
+    """Populate DeviceInfo's serial_number/sw_version/hw_version from the `di`
+    record (see protocol.device.parse_device_info). Only includes fields that
     actually parsed."""
     di_value = tlv.get_value(records, "di")
     if not isinstance(di_value, str):
@@ -104,15 +97,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], LightEntity):
     """One Nanoleaf LTPDU strip.
 
-    `effect` reflects the strip's real current-scene state, read live every poll via
-    ci's CurrentEffect sub-command (protocol/ci.py's decode_current, folded into
-    coordinator.py's _async_update_data as "current_scene_id") — genuinely accurate,
-    including changes made from the physical remote or another client, not just
-    optimistic tracking of what HA itself last did. A running scene ID is resolved to
-    a name via the coordinator's per-entry registry when known; an unregistered ID
-    (e.g. an unnamed factory preset, or a scene saved by another client) falls back to
-    a generic "Scene <id>" label. No scene playing (static color/off) or an unsaved
-    live preview both report `effect=None`, since neither is a name in `effect_list`.
+    `effect` is read live from the device every poll (ci's CurrentEffect, see
+    coordinator.py's "current_scene_id"), not just tracked optimistically — so it
+    reflects changes made from the physical remote or another client too. A running
+    scene ID resolves to a name via the coordinator's registry when known, else a
+    generic "Scene <id>" label. No scene playing or an unsaved live preview both
+    report `effect=None`.
     """
 
     _attr_has_entity_name = True
@@ -204,9 +194,8 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], LightEntit
         params = scene_services.encode_motion_params(style_id, motion_params)
         scene_id = await self.coordinator.async_allocate_scene_id(name)
         await self.coordinator.runtime.save_scene(scene_id, style_id, params, scene_services.encode_colors(colors))
-        # Also record the recipe in the shared, domain-wide library (scene_library.py)
-        # — a starting template for future edits/copies, not a live link back to any
-        # device's already-saved scene. See that module's docstring.
+        # Also record the recipe in the shared library (scene_library.py) as a
+        # starting template for future edits/copies.
         library = self.hass.data[SCENE_LIBRARY_KEY]
         await library.async_save_recipe(name, motion_style, motion_params, colors)
         return {"scene_id": scene_id}
@@ -215,13 +204,9 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], LightEntit
         await self.coordinator.async_delete_scene(name)
 
     async def async_list_device_scenes(self) -> ServiceResponse:
-        """Reads every scene actually stored on the strip directly (ci's ListScene +
-        GetScene), not from the local name registry — this can see scenes the
-        registry doesn't know about (unnamed factory presets, or ones saved by
-        another client) and can't drift from real device state the way the registry
-        could. Complements, not replaces, get_scene_library's shared recipe book:
-        this is "what's really on this device right now", the library is "named
-        starting-point recipes, possibly for a different device"."""
+        """Reads every scene actually stored on the strip (ci's ListScene +
+        GetScene), not from the local name registry — sees scenes the registry
+        doesn't know about (unnamed presets, scenes saved by another client)."""
         reverse_names = {sid: name for name, sid in self.coordinator.scenes.items()}
         scenes: dict[str, dict[str, Any]] = {}
         for scene_id in await self.coordinator.runtime.list_scenes():

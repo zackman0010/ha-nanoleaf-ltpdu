@@ -1,7 +1,8 @@
-// Milestone 2 (per the plan): capabilities + library fetch, and the two read-only
-// lists — scenes saved on this device (from the entity's own effect_list attribute,
-// with activate + delete) and the shared scene library (browse only; "load into
-// editor" arrives with the editor itself in Milestone 3).
+// The Nanoleaf scene-editor Lovelace card: capabilities + shared-library fetch, the
+// two scene lists (saved on this device — from the entity's own effect_list
+// attribute, with activate + delete; and the shared recipe library, browse + "load
+// into editor"), and the editor itself (style/param/color/name editing,
+// button-triggered preview with cancel-restores, and save).
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
 
@@ -16,6 +17,7 @@ import {
 } from "./capabilities";
 import { hexToHsb, hsbToHex } from "./color";
 import type { HomeAssistant, LovelaceCardConfig } from "./ha-types";
+import "./motion-preview";
 import "./nanoleaf-scene-card-editor";
 
 const DOMAIN = "nanoleaf_ltpdu";
@@ -27,6 +29,16 @@ interface StripSnapshot {
   hsColor?: [number, number];
   brightness?: number;
 }
+
+// Nanoleaf Desktop's own real per-style defaults (not guessed — every field of
+// every style is covered, so no generic-midpoint fallback is needed).
+const STYLE_DEFAULT_PARAMS: Record<string, Record<string, number>> = {
+  Fade: { speed: 24, delay: 0, loop: 1 },
+  Random: { speed: 24, delay: 0 },
+  Highlight: { speed: 24, delay: 15, first_colour_frequency: 80 },
+  Flow: { speed: 24, delay: 0, direction: 1, loop: 1 },
+  Stripes: { speed: 24, direction: 1, segment: 50 },
+};
 
 function fieldLabel(field: string): string {
   return field
@@ -47,13 +59,18 @@ export class NanoleafSceneCard extends LitElement {
   // force a state push — see the plan's "Confirmed backend API" section).
   @state() private _locallyDeleted = new Set<string>();
 
-  // Scene editor — in-progress, unsaved. Save flow is a later milestone; this one
-  // covers style/param/color editing and manual (button-triggered only — no
-  // live/auto preview, per feedback) preview.
+  // Names just saved via this card, shown immediately for the same reason (the
+  // symmetric case of _locallyDeleted above).
+  @state() private _locallySaved = new Set<string>();
+
+  // Scene editor — in-progress until Save is pressed.
   @state() private _editorStyle?: string; // capitalized display name, e.g. "Fade"
   @state() private _editorParams: Record<string, number> = {};
   @state() private _editorColors: SceneColor[] = [];
+  @state() private _editorName = "";
   @state() private _previewError?: string;
+  @state() private _saveError?: string;
+  @state() private _saving = false;
 
   // The strip's state from just before the first Preview click in the current
   // editing session — set once, restored (and cleared) by Cancel. Not cleared by
@@ -116,8 +133,9 @@ export class NanoleafSceneCard extends LitElement {
 
   private _defaultParamsForStyle(styleName: string): Record<string, number> {
     const params: Record<string, number> = {};
+    const knownDefaults = STYLE_DEFAULT_PARAMS[styleName] ?? {};
     for (const [field, range] of fieldsForStyle(this._capabilities!, styleName)) {
-      params[field] = Math.round((range.min + range.max) / 2);
+      params[field] = field in knownDefaults ? knownDefaults[field] : Math.round((range.min + range.max) / 2);
     }
     return params;
   }
@@ -130,6 +148,8 @@ export class NanoleafSceneCard extends LitElement {
     this._editorStyle = firstStyle;
     this._editorParams = this._defaultParamsForStyle(firstStyle);
     this._editorColors = [{ hue: 0, saturation: 100, brightness: 100 }];
+    this._editorName = "";
+    this._saveError = undefined;
   }
 
   private _loadRecipeIntoEditor(name: string): void {
@@ -140,6 +160,12 @@ export class NanoleafSceneCard extends LitElement {
     this._editorStyle = capitalize(recipe.motion_style);
     this._editorParams = { ...recipe.motion_params };
     this._editorColors = recipe.colors.map((c) => ({ ...c }));
+    this._editorName = name;
+    this._saveError = undefined;
+  }
+
+  private _onNameInput(value: string): void {
+    this._editorName = value;
   }
 
   private _onStyleSelect(styleName: string): void {
@@ -240,6 +266,50 @@ export class NanoleafSceneCard extends LitElement {
     }
   }
 
+  private async _saveScene(): Promise<void> {
+    const name = this._editorName.trim();
+    if (!this._hass || !this._editorStyle) {
+      return;
+    }
+    if (!name) {
+      this._saveError = "Enter a name for the scene.";
+      return;
+    }
+    if (name === RESERVED_SCENE_NAME) {
+      this._saveError = `"${RESERVED_SCENE_NAME}" is a reserved factory scene and can't be overwritten.`;
+      return;
+    }
+    const entityId = this._config!.entity as string;
+    const motionStyle = this._editorStyle.toLowerCase();
+    this._saving = true;
+    try {
+      await this._hass.callService(
+        DOMAIN,
+        "save_scene",
+        { name, motion_style: motionStyle, motion_params: this._editorParams, colors: this._editorColors },
+        { entity_id: entityId }
+      );
+      this._saveError = undefined;
+      // Optimistic updates — save_scene doesn't force a state push (effect_list can
+      // lag ~15s) and there's no reason to round-trip get_scene_library just to see
+      // the recipe we already know we just wrote.
+      this._locallySaved = new Set(this._locallySaved).add(name);
+      const restoredFromDelete = new Set(this._locallyDeleted);
+      restoredFromDelete.delete(name);
+      this._locallyDeleted = restoredFromDelete;
+      this._library = {
+        recipes: {
+          ...this._library?.recipes,
+          [name]: { motion_style: motionStyle, motion_params: { ...this._editorParams }, colors: this._editorColors.map((c) => ({ ...c })) },
+        },
+      };
+    } catch (err) {
+      this._saveError = err instanceof Error ? err.message : String(err);
+    } finally {
+      this._saving = false;
+    }
+  }
+
   private async _activateScene(name: string): Promise<void> {
     const entityId = this._config!.entity as string;
     await this._hass!.callService("light", "turn_on", { entity_id: entityId, effect: name });
@@ -248,13 +318,19 @@ export class NanoleafSceneCard extends LitElement {
   private async _deleteScene(name: string): Promise<void> {
     const entityId = this._config!.entity as string;
     this._locallyDeleted = new Set(this._locallyDeleted).add(name);
+    const savedRestore = new Set(this._locallySaved);
+    const savedWithoutName = new Set(this._locallySaved);
+    savedWithoutName.delete(name);
+    this._locallySaved = savedWithoutName;
     try {
       await this._hass!.callService(DOMAIN, "delete_scene", { name }, { entity_id: entityId });
     } catch (err) {
-      // Roll back the optimistic hide if the delete actually failed.
+      // Roll back the optimistic hide (and any optimistic "just saved" mark) if the
+      // delete actually failed.
       const restored = new Set(this._locallyDeleted);
       restored.delete(name);
       this._locallyDeleted = restored;
+      this._locallySaved = savedRestore;
       this._loadError = err instanceof Error ? err.message : String(err);
     }
   }
@@ -263,7 +339,11 @@ export class NanoleafSceneCard extends LitElement {
     const entityId = this._config?.entity as string | undefined;
     const entity = entityId ? this._hass?.states[entityId] : undefined;
     const effectList = (entity?.attributes.effect_list as string[] | undefined) ?? [];
-    return effectList.filter((name) => !this._locallyDeleted.has(name));
+    const names = new Set([...effectList, ...this._locallySaved]);
+    for (const deleted of this._locallyDeleted) {
+      names.delete(deleted);
+    }
+    return [...names];
   }
 
   protected render() {
@@ -399,10 +479,33 @@ export class NanoleafSceneCard extends LitElement {
         </div>
       </div>
 
+      <nanoleaf-motion-preview
+        .motionStyle=${this._editorStyle}
+        .params=${this._editorParams}
+        .colors=${this._editorColors}
+      ></nanoleaf-motion-preview>
+      <p class="muted preview-hint">
+        Simulated approximation only — press Preview below to see it on the strip.
+      </p>
+
       <button class="preview" @click=${() => this._previewNow()}>Preview</button>
       ${this._preSnapshot
         ? html`<button class="cancel" @click=${() => this._cancelPreview()}>Cancel preview</button>`
         : nothing}
+
+      <label class="field name-field">
+        <span>Name</span>
+        <input
+          type="text"
+          .value=${this._editorName}
+          placeholder="Scene name"
+          @input=${(e: Event) => this._onNameInput((e.target as HTMLInputElement).value)}
+        />
+      </label>
+      ${this._saveError ? html`<p class="error">${this._saveError}</p>` : nothing}
+      <button class="save" ?disabled=${this._saving} @click=${() => this._saveScene()}>
+        ${this._saving ? "Saving…" : "Save"}
+      </button>
     `;
   }
 
@@ -446,6 +549,9 @@ export class NanoleafSceneCard extends LitElement {
     .muted {
       color: var(--secondary-text-color);
       font-size: 0.9em;
+    }
+    .preview-hint {
+      margin: 0 0 8px;
     }
     .error {
       color: var(--error-color, #db4437);
@@ -528,6 +634,31 @@ export class NanoleafSceneCard extends LitElement {
       color: var(--primary-text-color);
       padding: 8px 16px;
       cursor: pointer;
+    }
+    .name-field {
+      margin-top: 16px;
+    }
+    .name-field input[type="text"] {
+      flex: 1;
+      background: none;
+      border: none;
+      border-bottom: 1px solid var(--divider-color, #ccc);
+      color: var(--primary-text-color);
+      font-size: 1em;
+      padding: 4px 0;
+    }
+    .save {
+      margin-top: 8px;
+      border: none;
+      border-radius: 4px;
+      background: var(--primary-color);
+      color: var(--text-primary-color, #fff);
+      padding: 8px 16px;
+      cursor: pointer;
+    }
+    .save:disabled {
+      opacity: 0.6;
+      cursor: default;
     }
   `;
 }
