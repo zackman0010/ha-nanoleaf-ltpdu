@@ -214,6 +214,11 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], LightEntit
         return {"scene_id": scene_id}
 
     async def async_delete_scene(self, name: str) -> None:
+        """Deletes from the device/registry only — deliberately does NOT touch the
+        shared library's recipe for `name` (scene_library.py). The library is a
+        device-independent template store; a deleted factory preset's recipe stays
+        loadable there (e.g. to save a copy under a new name), it just can't be
+        re-saved back under its own reserved name."""
         await self.coordinator.async_delete_scene(name)
         # Same reasoning as async_save_scene: without this, a deleted scene would
         # keep appearing in the Effect list until the next poll.

@@ -24,12 +24,14 @@ import "./nanoleaf-scene-card";
 import type { NanoleafSceneCard, SceneSavedEventDetail } from "./nanoleaf-scene-card";
 
 const DOMAIN = "nanoleaf_ltpdu";
-const RESERVED_SCENE_NAME = "Northern Lights";
+// Scene IDs 250-254 — built into every strip's firmware (see const.py's
+// RESERVED_SCENE_NAMES). Deletable like any other scene, just with a confirmation
+// prompt first, since factory content can't be recovered once it's gone.
+const RESERVED_SCENE_NAMES = new Set(["Northern Lights", "SecretLab Signature", "Cloud9", "Team Liquid", "Bubble Gum"]);
 
 interface StripRow {
   name: string;
   sceneId?: number;
-  deletable: boolean;
 }
 
 @customElement("nanoleaf-scene-panel")
@@ -158,6 +160,13 @@ export class NanoleafScenePanel extends LitElement {
     }
   }
 
+  private _onDeleteClick(entityId: string, name: string): void {
+    if (RESERVED_SCENE_NAMES.has(name) && !confirm(`Are you sure you want to delete this factory preset ("${name}")? This can't be undone.`)) {
+      return;
+    }
+    void this._deleteScene(entityId, name);
+  }
+
   private async _deleteScene(entityId: string, name: string): Promise<void> {
     if (!this._hass) {
       return;
@@ -217,9 +226,8 @@ export class NanoleafScenePanel extends LitElement {
       ? Object.entries(refreshed.scenes).map(([idStr, scene]) => ({
           name: scene.name ?? `Unknown Scene ${idStr}`,
           sceneId: Number(idStr),
-          deletable: scene.name != null && scene.name !== RESERVED_SCENE_NAME,
         }))
-      : this._knownSceneNames(entityId).map((name) => ({ name, deletable: name !== RESERVED_SCENE_NAME }));
+      : this._knownSceneNames(entityId).map((name) => ({ name }));
 
     return html`
       <h2>
@@ -239,12 +247,8 @@ export class NanoleafScenePanel extends LitElement {
                 (row) => html`
                   <li>
                     <button class="scene-name" @click=${() => this._loadRowIntoEditor(row)}>${row.name}</button>
-                    ${row.deletable
-                      ? html`
-                          <button class="activate" title="Activate" @click=${() => this._activateScene(entityId, row.name)}>▶</button>
-                          <button class="delete" title="Delete" @click=${() => this._deleteScene(entityId, row.name)}>✕</button>
-                        `
-                      : nothing}
+                    <button class="activate" title="Activate" @click=${() => this._activateScene(entityId, row.name)}>▶</button>
+                    <button class="delete" title="Delete" @click=${() => this._onDeleteClick(entityId, row.name)}>✕</button>
                   </li>
                 `
               )}

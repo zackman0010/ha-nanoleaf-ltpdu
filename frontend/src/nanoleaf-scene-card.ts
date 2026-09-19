@@ -21,7 +21,10 @@ import type { HomeAssistant, LovelaceCardConfig } from "./ha-types";
 import "./motion-preview";
 
 const DOMAIN = "nanoleaf_ltpdu";
-const RESERVED_SCENE_NAME = "Northern Lights";
+// Scene IDs 250-254 — built into every strip's firmware (see const.py's
+// RESERVED_SCENE_NAMES). Deletable (with confirmation — see nanoleaf-scene-panel.ts),
+// just never overwritable/reassignable to different content.
+const RESERVED_SCENE_NAMES = new Set(["Northern Lights", "SecretLab Signature", "Cloud9", "Team Liquid", "Bubble Gum"]);
 
 interface StripSnapshot {
   on: boolean;
@@ -318,8 +321,8 @@ export class NanoleafSceneCard extends LitElement {
       this._saveError = "Enter a name for the scene.";
       return;
     }
-    if (name === RESERVED_SCENE_NAME) {
-      this._saveError = `"${RESERVED_SCENE_NAME}" is a reserved factory scene and can't be overwritten.`;
+    if (RESERVED_SCENE_NAMES.has(name)) {
+      this._saveError = `"${name}" is a reserved factory scene and can't be overwritten.`;
       return;
     }
     const idRange = this._capabilities?.scene_id_range;

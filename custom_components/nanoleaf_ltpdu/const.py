@@ -27,16 +27,15 @@ NANOLEAF_LTPDU_MFG_DATA_PREFIX = [0x4E, 0x4C, 0x4D, 0x30]
 
 RESERVED_SCENE_ID_NORTHERN_LIGHTS = 0xFA  # built into firmware, never client-allocated
 # 0xFB-0xFE (251-254) are also built into firmware with pre-defined settings, same as
-# Northern Lights — valid, loadable scene IDs, just never client-allocated. Their real
-# display names aren't known (Nanoleaf Desktop's own scene list only ever surfaces
-# "Northern Lights" by name; confirmed by the user directly against real hardware that
-# the others exist and are reserved, not what they're actually called).
+# Northern Lights — valid, loadable scene IDs, just never client-allocated (they can
+# still be deleted like any other scene — see coordinator.async_delete_scene — just
+# not overwritten/reassigned to a different name).
 RESERVED_SCENE_NAMES = {
     RESERVED_SCENE_ID_NORTHERN_LIGHTS: "Northern Lights",
-    0xFB: "Factory Scene 251",
-    0xFC: "Factory Scene 252",
-    0xFD: "Factory Scene 253",
-    0xFE: "Factory Scene 254",
+    0xFB: "SecretLab Signature",
+    0xFC: "Cloud9",
+    0xFD: "Team Liquid",
+    0xFE: "Bubble Gum",
 }
 
 MIN_ALLOCATABLE_SCENE_ID = 1

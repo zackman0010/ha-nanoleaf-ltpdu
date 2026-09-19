@@ -113,11 +113,17 @@ class NanoleafLtpduCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_load_scene_registry(self) -> None:
         stored = await self._scene_store.async_load()
         if stored is None:
-            stored = {"next_id": MIN_ALLOCATABLE_SCENE_ID, "scenes": {}}
+            stored = {"next_id": MIN_ALLOCATABLE_SCENE_ID, "scenes": {}, "deleted_reserved_ids": []}
+        stored.setdefault("deleted_reserved_ids", [])  # back-compat with a store saved before this existed
         self._scene_registry_data = stored
         # name -> id, reserved factory scenes (e.g. "Northern Lights") first so a
-        # user-created scene can never accidentally shadow one.
-        self.scenes = {name: sid for sid, name in RESERVED_SCENE_NAMES.items()} | dict(stored["scenes"])
+        # user-created scene can never accidentally shadow one — except any the user
+        # has deliberately deleted, which must stay gone across a reload/restart
+        # instead of reappearing just because RESERVED_SCENE_NAMES always lists them.
+        deleted_reserved_ids = set(stored["deleted_reserved_ids"])
+        self.scenes = {
+            name: sid for sid, name in RESERVED_SCENE_NAMES.items() if sid not in deleted_reserved_ids
+        } | dict(stored["scenes"])
 
     async def async_allocate_scene_id(self, name: str) -> int:
         """Return the existing ID for `name`, allocating (and persisting) a new one if needed."""
@@ -155,16 +161,28 @@ class NanoleafLtpduCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.scenes[name] = scene_id
 
     async def async_delete_scene(self, name: str) -> None:
-        """Deletes on-device first, then the registry mapping — so a failed device
-        delete doesn't leave the registry forgetting a scene that's still on the strip."""
-        if name in RESERVED_SCENE_NAMES.values():
-            raise ValueError(f"'{name}' is a reserved factory scene and cannot be deleted")
-        scenes = self._scene_registry_data["scenes"]
-        if name in scenes:
-            await self.runtime.delete_scene(scenes[name])
-            del scenes[name]
+        """Deletes on-device first, then any registry bookkeeping — so a failed
+        device delete doesn't leave the registry forgetting a scene that's still on
+        the strip. Factory presets (Northern Lights and friends, scene IDs 250-254)
+        can be deleted like any other scene — the frontend prompts for confirmation
+        first, since factory content can't be recovered once it's gone. A deleted
+        factory preset's ID is remembered (deleted_reserved_ids) so it doesn't
+        silently reappear on the next reload — RESERVED_SCENE_NAMES itself never
+        changes, only whether a given entry is currently re-seeded from it."""
+        scene_id = self.scenes.get(name)
+        if scene_id is None:
+            return
+        await self.runtime.delete_scene(scene_id)
+        self.scenes.pop(name, None)
+        persisted = self._scene_registry_data["scenes"]
+        if name in persisted:
+            del persisted[name]
             await self._scene_store.async_save(self._scene_registry_data)
-            self.scenes.pop(name, None)
+        elif scene_id in RESERVED_SCENE_NAMES:
+            deleted_reserved_ids = self._scene_registry_data["deleted_reserved_ids"]
+            if scene_id not in deleted_reserved_ids:
+                deleted_reserved_ids.append(scene_id)
+                await self._scene_store.async_save(self._scene_registry_data)
 
     async def _async_ensure_connected(self) -> None:
         if self._connected:

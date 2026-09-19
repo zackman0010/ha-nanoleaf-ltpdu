@@ -188,10 +188,21 @@ async def test_scene_registry_reserved_and_allocated_ids(hass: HomeAssistant, co
     assert fake.deleted_scene_ids == [1]  # on-device delete, not just registry bookkeeping
 
     with pytest.raises(ValueError):
-        await coordinator.async_delete_scene("Northern Lights")  # reserved, not deletable
+        await coordinator.async_allocate_scene_id("Northern Lights")  # reserved, not (re)savable
 
-    with pytest.raises(ValueError):
-        await coordinator.async_allocate_scene_id("Northern Lights")  # reserved, not (re)savable either
+    # Factory presets CAN be deleted (the frontend prompts for confirmation first) —
+    # just not reassigned to a new name/content afterward.
+    await coordinator.async_delete_scene("Northern Lights")
+    assert "Northern Lights" not in coordinator.scenes
+    assert fake.deleted_scene_ids == [1, 0xFA]
+
+    # And the deletion survives a reload — it doesn't reappear just because
+    # RESERVED_SCENE_NAMES always lists it.
+    coordinator_b = NanoleafLtpduCoordinator(hass, config_entry)
+    coordinator_b.runtime = NanoleafLtpduRuntime(hass, fake)  # type: ignore[arg-type]
+    await coordinator_b.async_load_scene_registry()
+    assert "Northern Lights" not in coordinator_b.scenes
+    assert coordinator_b.scenes["Cloud9"] == 0xFC  # every other reserved preset is unaffected
 
 
 async def test_assign_scene_id_explicit_id(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
