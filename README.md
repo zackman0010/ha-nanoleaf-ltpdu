@@ -19,11 +19,17 @@ works, but loses Nanoleaf's Motion-based scene system and adds an extra hop. Thi
 integration talks the device's native protocol directly, exposing:
 
 - A standard HA `light` entity (HS color + brightness) with reliable, non-destructive
-  state polling.
-- Full **scene** support: load an existing on-device scene, save a new one, preview one
-  without committing it, and delete one — via HA services, with a
-  `get_scene_capabilities` service that exposes the exact motion-style/parameter ranges
-  the firmware accepts (intended as the backend for a future custom Lovelace card).
+  state polling, the actively-running scene reflected live in `effect` (including
+  scenes triggered from the physical remote or another client), and
+  model/serial-number/firmware/hardware-version populated on the device's Info page.
+- A full **scene editor**, added to HA's own sidebar ("Nanoleaf Scenes") — no YAML, no
+  manual service calls required: pick a strip, edit a scene with a live preview, save
+  it to the strip or to a shared library you can reuse across every strip you own, or
+  delete one (factory presets included, with a confirmation prompt). Everything the
+  panel does is also exposed as a plain HA service
+  (`save_scene`/`delete_scene`/`preview_scene`/`list_device_scenes`/
+  `get_scene_capabilities`/`get_scene_library`/`save_scene_to_library`/`list_strips`)
+  for anyone who'd rather script it.
 - **In-app onboarding**: pairing a factory-reset device over Bluetooth and pushing it
   your Thread network credentials, entirely inside HA's own config flow — no separate
   script, no Nanoleaf app.
@@ -145,11 +151,31 @@ BLE onboarding requires a Bluetooth adapter (or an
 range of the device — most useful when your HA host itself isn't physically near where
 the device lives.
 
+If a strip is discoverable both ways at once — already Thread-joined, but still also
+advertising over BLE — you'll be asked which discovery path to use instead of one
+silently winning.
+
+## Scene editor
+
+Installing this integration adds a **"Nanoleaf Scenes"** page to HA's sidebar
+automatically — no dashboard/Lovelace resource step required. It has three parts:
+
+- **Your strips** — pick one to see its saved scenes, including the five built-in
+  factory presets (Northern Lights, SecretLab Signature, Cloud9, Team Liquid, Bubble
+  Gum). "Refresh from strip" re-reads what's actually stored on the device, in case it
+  was changed outside HA.
+- **The editor** — motion style, its per-field parameters (Speed, Delay, Direction,
+  Loop, etc.), and up to 7 colors, with a live animated preview and a live
+  push-to-device preview before you decide to save.
+- **The library** — scenes saved here aren't tied to any one strip; apply a library
+  recipe to any strip you own, or promote one of a strip's own scenes into the shared
+  library.
+
+Factory presets can be deleted (with a confirmation prompt, since firmware content
+can't be recovered once it's gone), but not renamed or overwritten.
+
 ## Known limitations
 
-- On-device scene/effect state isn't readable from the firmware — the currently-active
-  scene is tracked optimistically (set on a successful `load_scene` call, restored
-  across HA restarts, cleared when you set a color directly) rather than polled.
 - BLE device matching currently filters on Nanoleaf's manufacturer-data prefix; this
   hasn't been validated against every Nanoleaf Essentials model, only MAGRGB strips.
 
