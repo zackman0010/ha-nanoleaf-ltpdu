@@ -151,29 +151,42 @@ export class NanoleafMotionPreview extends LitElement {
     if (!bar) {
       return;
     }
+    const barWidthPx = bar.clientWidth; // read before any style writes below, to avoid a layout thrash every frame
+    if (!barWidthPx) {
+      return; // not laid out yet — next frame will have a real width
+    }
     const palette = this.colors.map((c) => hsbToHex(c));
     const stops = hardStops ? this._hardStops(palette) : this._softStops(palette);
     bar.style.backgroundImage = `linear-gradient(90deg, ${stops})`;
 
     // Both rely on native CSS tiling (background-repeat) for a seamless loop —
     // going past one tile just shows the next identical one, rather than exposing
-    // empty background past the image's edge. Stripes' Segment shrinks one tile to
-    // fit more repeats across the bar (smaller segment = narrower/more-numerous
-    // stripes); Flow always uses a single full-width tile.
+    // empty background past the image's edge. One tile is the full run of colors;
+    // Stripes' Segment shrinks it to fit more repeats across the bar (smaller
+    // segment = narrower/more-numerous stripes), Flow always uses a single
+    // full-width tile. Size is tracked in px, not %: a percentage background-size
+    // combined with a percentage background-position resolves the position against
+    // (positioning-area size − background-size), which only lines up with a clean
+    // one-tile-per-cycle loop when background-size is exactly 100% — never true
+    // here once repeats > 1.
     const repeats = hardStops ? this._stripeRepeats() : 1;
+    const tileWidthPx = barWidthPx / repeats;
     bar.style.backgroundRepeat = "repeat";
-    bar.style.backgroundSize = `${(palette.length * 100) / repeats}% 100%`;
+    bar.style.backgroundSize = `${tileWidthPx}px 100%`;
 
     // direction=0 (unchecked) scrolls left-to-right, direction=1 (checked) scrolls
     // right-to-left. Loop is ignored on purpose — confirmed on real hardware that
     // it has no observable effect, so a preview that stops on loop=off would be
-    // actively misleading.
+    // actively misleading. The whole visible bar's pattern completes one full
+    // loop every speedMs, regardless of how many stripe-repeats are packed into
+    // it — scrolling by the full bar width (an exact multiple of one tile, so
+    // still seamless) rather than just one tile width, which would make more
+    // repeats scroll proportionally slower for the same Speed.
     const direction = (this.params.direction ?? 0) === 0 ? -1 : 1;
-    const cycleMs = speedMs(this.params) * palette.length;
+    const cycleMs = speedMs(this.params);
     const elapsed = now - this._startedAt;
     const progress = (elapsed % cycleMs) / cycleMs;
-    const positionPercent = direction * progress * 100;
-    bar.style.backgroundPositionX = `${positionPercent}%`;
+    bar.style.backgroundPositionX = `${direction * progress * barWidthPx}px`;
   }
 
   private _stripeRepeats(): number {

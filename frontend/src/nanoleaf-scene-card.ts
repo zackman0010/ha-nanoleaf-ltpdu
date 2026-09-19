@@ -63,6 +63,15 @@ function fieldLabel(field: string): string {
     .join(" ");
 }
 
+// Speed/Delay are raw bytes in 0.1s increments (see FIELD_RANGES in services.py);
+// every other numeric field (segment, first_colour_frequency) is a plain 0-100 value.
+function formatFieldValue(field: string, value: number): string {
+  if (field === "speed" || field === "delay") {
+    return `${(value / 10).toFixed(1)}s`;
+  }
+  return String(value);
+}
+
 @customElement("nanoleaf-scene-card")
 export class NanoleafSceneCard extends LitElement {
   @state() private _config?: LovelaceCardConfig;
@@ -87,6 +96,9 @@ export class NanoleafSceneCard extends LitElement {
 
   private _hass?: HomeAssistant;
   private _loadStarted = false;
+  // Which color is being dragged, for the drag-handle-driven reorder — transient
+  // interaction state, not worth a re-render of its own.
+  private _colorDragFromIndex?: number;
 
   public static getStubConfig(): LovelaceCardConfig {
     return { type: "custom:nanoleaf-scene-card", entity: "" };
@@ -207,6 +219,27 @@ export class NanoleafSceneCard extends LitElement {
       return;
     }
     this._editorColors = this._editorColors.filter((_, i) => i !== index);
+  }
+
+  private _onColorDragStart(e: DragEvent, index: number): void {
+    this._colorDragFromIndex = index;
+    e.dataTransfer?.setData("text/plain", String(index));
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+    }
+  }
+
+  private _onColorDrop(e: DragEvent, targetIndex: number): void {
+    e.preventDefault();
+    const fromIndex = this._colorDragFromIndex;
+    this._colorDragFromIndex = undefined;
+    if (fromIndex == null || fromIndex === targetIndex) {
+      return;
+    }
+    const colors = [...this._editorColors];
+    const [moved] = colors.splice(fromIndex, 1);
+    colors.splice(targetIndex, 0, moved);
+    this._editorColors = colors;
   }
 
   private _captureSnapshot(): void {
@@ -406,27 +439,46 @@ export class NanoleafSceneCard extends LitElement {
                     .value=${String(value)}
                     @input=${(e: Event) => this._onParamInput(field, Number((e.target as HTMLInputElement).value))}
                   />
-                  <span class="value">${value}</span>
+                  <span class="value">${formatFieldValue(field, value)}</span>
                 `}
           </label>
         `;
       })}
 
       <div class="colors">
-        <span>Colors</span>
+        <span>Colors<span class="muted"> — drag ☰ to reorder</span></span>
         <div class="color-slots">
           ${this._editorColors.map(
             (color, index) => html`
-              <span class="color-slot">
-                <input
-                  type="color"
-                  .value=${hsbToHex(color)}
-                  @input=${(e: Event) => this._onColorInput(index, (e.target as HTMLInputElement).value)}
-                />
-                ${this._editorColors.length > colorMin
-                  ? html`<button class="delete" @click=${() => this._removeColorSlot(index)}>✕</button>`
-                  : nothing}
-              </span>
+              <input
+                type="color"
+                .value=${hsbToHex(color)}
+                @input=${(e: Event) => this._onColorInput(index, (e.target as HTMLInputElement).value)}
+                @dragover=${(e: DragEvent) => e.preventDefault()}
+                @drop=${(e: DragEvent) => this._onColorDrop(e, index)}
+              />
+              <span
+                class="drag-handle"
+                draggable="true"
+                @dragstart=${(e: DragEvent) => this._onColorDragStart(e, index)}
+                @dragover=${(e: DragEvent) => e.preventDefault()}
+                @drop=${(e: DragEvent) => this._onColorDrop(e, index)}
+                >☰</span
+              >
+              ${this._editorColors.length > colorMin
+                ? html`<button
+                    class="delete"
+                    @click=${() => this._removeColorSlot(index)}
+                    @dragover=${(e: DragEvent) => e.preventDefault()}
+                    @drop=${(e: DragEvent) => this._onColorDrop(e, index)}
+                  >
+                    ✕
+                  </button>`
+                : html`<span
+                    class="delete-placeholder"
+                    @dragover=${(e: DragEvent) => e.preventDefault()}
+                    @drop=${(e: DragEvent) => this._onColorDrop(e, index)}
+                  ></span>`}
             `
           )}
           ${this._editorColors.length < colorMax
@@ -539,32 +591,46 @@ export class NanoleafSceneCard extends LitElement {
       flex: 1;
     }
     .field .value {
-      flex: 0 0 2.5em;
+      flex: 0 0 3.5em;
       text-align: right;
     }
     .colors {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       gap: 8px;
       margin: 12px 0;
     }
     .color-slots {
-      display: flex;
-      flex-wrap: wrap;
+      display: grid;
+      grid-auto-flow: column;
+      grid-template-rows: repeat(3, auto);
       align-items: center;
-      gap: 6px;
+      justify-items: center;
+      gap: 4px 6px;
     }
-    .color-slot {
-      display: inline-flex;
-      align-items: center;
-      gap: 2px;
-    }
-    .color-slot input[type="color"] {
+    .color-slots input[type="color"] {
       width: 32px;
       height: 32px;
       border: none;
       padding: 0;
       background: none;
+    }
+    .drag-handle {
+      cursor: grab;
+      color: var(--secondary-text-color);
+      line-height: 1;
+      user-select: none;
+    }
+    .drag-handle:active {
+      cursor: grabbing;
+    }
+    .delete,
+    .delete-placeholder {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 20px;
+      min-height: 20px;
     }
     .delete {
       background: none;
