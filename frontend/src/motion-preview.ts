@@ -4,11 +4,11 @@
 // scatter) is illustrative, not a claim about real device rendering; Speed/Delay's
 // timing is not (see speedMs/delayMs below).
 //
-// Fade/Random/Highlight render as a row of independent segments (each
-// CSS-transitions its own background-color on its own schedule); Flow/Stripes
-// render as one continuous gradient bar whose position is animated every frame.
-// Either way the animation loop reads `params`/`colors` fresh every frame, so a
-// slider drag updates the preview immediately with no restart.
+// Fade/Random/Highlight show one shared color across the whole strip at a time,
+// CSS-transitioning between colors; Flow/Stripes render as one continuous
+// gradient bar whose position is animated every frame. Either way the animation
+// loop reads `params`/`colors` fresh every frame, so a slider drag updates the
+// preview immediately with no restart.
 import { LitElement, html, css } from "lit";
 import { customElement, property } from "lit/decorators.js";
 
@@ -41,10 +41,6 @@ function pickWeightedColor(palette: SceneColor[], firstColourFrequency: number):
   return rest[Math.floor(Math.random() * rest.length)];
 }
 
-interface SegmentSchedule {
-  nextChangeAt: number;
-}
-
 @customElement("nanoleaf-motion-preview")
 export class NanoleafMotionPreview extends LitElement {
   @property({ attribute: false }) motionStyle?: string; // capitalized, e.g. "Fade"
@@ -54,10 +50,14 @@ export class NanoleafMotionPreview extends LitElement {
   private _rafId?: number;
   private _startedAt = 0;
   private _segmentEls: HTMLElement[] = [];
-  private _schedule: SegmentSchedule[] = [];
   private _renderedStyle?: string;
+  // Fade/Random/Highlight all show one shared color across the whole strip at a
+  // time, transitioning to it over Speed then holding for Delay before advancing
+  // — Fade advances sequentially through the palette, Random/Highlight pick the
+  // next color randomly (optionally weighted toward the first color).
   private _fadeIndex = 0;
-  private _fadeAdvanceAt = 0;
+  private _currentColor?: SceneColor;
+  private _colorAdvanceAt = 0;
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -82,9 +82,9 @@ export class NanoleafMotionPreview extends LitElement {
       this._segmentEls = Array.from(this.shadowRoot?.querySelectorAll<HTMLElement>(".segment") ?? []);
       const now = performance.now();
       this._startedAt = now; // fresh timeline for whichever style just became active
-      this._schedule = this._segmentEls.map(() => ({ nextChangeAt: now + Math.random() * 400 }));
       this._fadeIndex = 0;
-      this._fadeAdvanceAt = now + speedMs(this.params) + delayMs(this.params);
+      this._currentColor = undefined;
+      this._colorAdvanceAt = now;
     }
   }
 
@@ -116,37 +116,33 @@ export class NanoleafMotionPreview extends LitElement {
     }
   }
 
-  // -- Fade: every segment shows the same color, cycling through the palette -----
-  private _animateFade(now: number): void {
-    const step = speedMs(this.params) + delayMs(this.params);
-    const loop = (this.params.loop ?? 1) !== 0;
-    if (now >= this._fadeAdvanceAt) {
-      const atEnd = this._fadeIndex >= this.colors.length - 1;
-      if (!atEnd || loop) {
-        this._fadeIndex = (this._fadeIndex + 1) % this.colors.length;
-      }
-      this._fadeAdvanceAt = now + step;
-    }
-    const hex = hsbToHex(this.colors[this._fadeIndex]);
+  private _applyColorToAllSegments(color: SceneColor): void {
+    const hex = hsbToHex(color);
     for (const el of this._segmentEls) {
       el.style.transitionDuration = `${speedMs(this.params)}ms`;
       el.style.backgroundColor = hex;
     }
   }
 
-  // -- Random/Highlight: each segment independently jumps to a new palette color -
+  // -- Fade: cycles through the palette in order. Loop is ignored on purpose —
+  // confirmed on real hardware that it has no observable effect.
+  private _animateFade(now: number): void {
+    if (now >= this._colorAdvanceAt) {
+      this._fadeIndex = (this._fadeIndex + 1) % this.colors.length;
+      this._colorAdvanceAt = now + speedMs(this.params) + delayMs(this.params);
+    }
+    this._applyColorToAllSegments(this.colors[this._fadeIndex]);
+  }
+
+  // -- Random/Highlight: same transition/hold cycle as Fade, but the next color is
+  // picked randomly (Highlight weights toward the first color) instead of
+  // advancing sequentially.
   private _animateScatter(now: number, firstColourFrequency: number): void {
-    const step = speedMs(this.params) + delayMs(this.params);
-    this._segmentEls.forEach((el, i) => {
-      const sched = this._schedule[i];
-      if (!sched || now < sched.nextChangeAt) {
-        return;
-      }
-      const color = pickWeightedColor(this.colors, firstColourFrequency);
-      el.style.transitionDuration = `${speedMs(this.params)}ms`;
-      el.style.backgroundColor = hsbToHex(color);
-      sched.nextChangeAt = now + step;
-    });
+    if (now >= this._colorAdvanceAt || !this._currentColor) {
+      this._currentColor = pickWeightedColor(this.colors, firstColourFrequency);
+      this._colorAdvanceAt = now + speedMs(this.params) + delayMs(this.params);
+    }
+    this._applyColorToAllSegments(this._currentColor);
   }
 
   // -- Flow/Stripes: one continuous gradient bar, scrolled every frame -----------
@@ -159,20 +155,23 @@ export class NanoleafMotionPreview extends LitElement {
     const stops = hardStops ? this._hardStops(palette) : this._softStops(palette);
     bar.style.backgroundImage = `linear-gradient(90deg, ${stops})`;
 
-    // Stripes: rely on native CSS tiling (background-repeat) for the seamless
-    // loop, so Segment can just shrink one tile's size to fit more repeats across
-    // the bar — smaller segment = narrower/more-numerous stripes. Flow has no
-    // Segment param and no seam-hiding duplicate needed either way since it never
-    // tiles; its own trailing duplicate color in _softStops handles the loop point.
+    // Both rely on native CSS tiling (background-repeat) for a seamless loop —
+    // going past one tile just shows the next identical one, rather than exposing
+    // empty background past the image's edge. Stripes' Segment shrinks one tile to
+    // fit more repeats across the bar (smaller segment = narrower/more-numerous
+    // stripes); Flow always uses a single full-width tile.
     const repeats = hardStops ? this._stripeRepeats() : 1;
-    bar.style.backgroundRepeat = hardStops ? "repeat" : "no-repeat";
+    bar.style.backgroundRepeat = "repeat";
     bar.style.backgroundSize = `${(palette.length * 100) / repeats}% 100%`;
 
-    const direction = (this.params.direction ?? 0) === 0 ? 1 : -1;
+    // direction=0 (unchecked) scrolls left-to-right, direction=1 (checked) scrolls
+    // right-to-left. Loop is ignored on purpose — confirmed on real hardware that
+    // it has no observable effect, so a preview that stops on loop=off would be
+    // actively misleading.
+    const direction = (this.params.direction ?? 0) === 0 ? -1 : 1;
     const cycleMs = speedMs(this.params) * palette.length;
-    const loop = (this.params.loop ?? 1) !== 0;
     const elapsed = now - this._startedAt;
-    const progress = loop ? (elapsed % cycleMs) / cycleMs : Math.min(elapsed / cycleMs, 1);
+    const progress = (elapsed % cycleMs) / cycleMs;
     const positionPercent = direction * progress * 100;
     bar.style.backgroundPositionX = `${positionPercent}%`;
   }

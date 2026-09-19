@@ -8,15 +8,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components import panel_custom
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.helpers import entity_registry as er
 from homeassistant.loader import async_get_integration
 
 from . import services as scene_services
-from .const import DOMAIN, SCENE_LIBRARY_KEY
+from .const import CONF_LABEL_ID, DOMAIN, SCENE_LIBRARY_KEY
 from .coordinator import NanoleafLtpduCoordinator
 from .scene_library import SceneLibrary
 
@@ -24,47 +25,75 @@ PLATFORMS: list[Platform] = [Platform.LIGHT]
 
 SERVICE_GET_SCENE_CAPABILITIES = "get_scene_capabilities"
 SERVICE_GET_SCENE_LIBRARY = "get_scene_library"
+SERVICE_LIST_STRIPS = "list_strips"
 
-CARD_FILENAME = "nanoleaf-scene-card.js"
-CARD_URL_PATH = f"/{DOMAIN}/{CARD_FILENAME}"
+PANEL_FILENAME = "nanoleaf-scene-panel.js"
+PANEL_URL_PATH = f"/{DOMAIN}/{PANEL_FILENAME}"
 
 
-async def _async_register_scene_card(hass: HomeAssistant) -> None:
-    """Serve the built card bundle (frontend/, compiled to www/ — see that
-    directory's README) and auto-load it on every dashboard via
-    add_extra_js_url(), so installing via HACS is enough — no manual "add
-    resource" step. The query-string version cache-busts a HACS update against
-    whatever the browser already has cached for this URL."""
+async def _async_register_scene_panel(hass: HomeAssistant) -> None:
+    """Serve the built panel bundle (frontend/, compiled to www/ — see that
+    directory's README) and register it as a sidebar page. panel_custom's
+    registration isn't idempotent like add_extra_js_url was — a second call with
+    the same frontend_url_path raises ValueError — so guard on it already being
+    registered (matches how core integrations like insteon do this)."""
+    if DOMAIN in hass.data.get("frontend_panels", {}):
+        return
     integration = await async_get_integration(hass, DOMAIN)
     await hass.http.async_register_static_paths(
         [
             StaticPathConfig(
-                url_path=CARD_URL_PATH,
-                path=str(Path(__file__).parent / "www" / CARD_FILENAME),
+                url_path=PANEL_URL_PATH,
+                path=str(Path(__file__).parent / "www" / PANEL_FILENAME),
                 cache_headers=True,
             )
         ]
     )
-    add_extra_js_url(hass, f"{CARD_URL_PATH}?v={integration.version}")
+    await panel_custom.async_register_panel(
+        hass,
+        frontend_url_path=DOMAIN,
+        webcomponent_name="nanoleaf-scene-panel",
+        sidebar_title="Nanoleaf Scenes",
+        sidebar_icon="mdi:palette-swatch",
+        module_url=f"{PANEL_URL_PATH}?v={integration.version}",
+        require_admin=False,
+    )
+
+
+def _resolve_strips(hass: HomeAssistant) -> dict[str, dict[str, str]]:
+    """Every config entry's light entity_id + display name, for the scene-editor
+    panel's strip picker. An entry whose entity hasn't been registered yet (still
+    setting up) is simply omitted."""
+    registry = er.async_get(hass)
+    strips: dict[str, dict[str, str]] = {}
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        entity_id = registry.async_get_entity_id("light", DOMAIN, entry.data[CONF_LABEL_ID])
+        if entity_id is not None:
+            strips[entity_id] = {"name": entry.title}
+    return strips
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Domain-wide setup — registers the services that aren't tied to a specific
     strip (get_scene_capabilities just serializes ci.py's own constants;
-    get_scene_library reads the shared scene-recipe Store, see scene_library.py),
-    loads that shared library once, and registers the scene-editor card — all
-    regardless of how many config entries exist."""
+    get_scene_library reads the shared scene-recipe Store, see scene_library.py;
+    list_strips resolves every config entry's light entity for the scene-editor
+    panel's strip picker), loads that shared library once, and registers the
+    scene-editor panel — all regardless of how many config entries exist."""
     library = SceneLibrary(hass)
     await library.async_load()
     hass.data[SCENE_LIBRARY_KEY] = library
 
-    await _async_register_scene_card(hass)
+    await _async_register_scene_panel(hass)
 
     async def _handle_get_scene_capabilities(call: ServiceCall) -> ServiceResponse:
         return scene_services.get_scene_capabilities()
 
     async def _handle_get_scene_library(call: ServiceCall) -> ServiceResponse:
         return {"recipes": library.recipes}
+
+    async def _handle_list_strips(call: ServiceCall) -> ServiceResponse:
+        return {"strips": _resolve_strips(hass)}
 
     hass.services.async_register(
         DOMAIN,
@@ -76,6 +105,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         DOMAIN,
         SERVICE_GET_SCENE_LIBRARY,
         _handle_get_scene_library,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_LIST_STRIPS,
+        _handle_list_strips,
         supports_response=SupportsResponse.ONLY,
     )
     return True

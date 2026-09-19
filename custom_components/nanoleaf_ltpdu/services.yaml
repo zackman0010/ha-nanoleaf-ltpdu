@@ -4,6 +4,9 @@ get_scene_capabilities:
 get_scene_library:
   fields: {}
 
+list_strips:
+  fields: {}
+
 preview_scene:
   target:
     entity:
