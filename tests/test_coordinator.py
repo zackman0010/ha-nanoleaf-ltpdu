@@ -166,8 +166,12 @@ async def test_scene_registry_reserved_and_allocated_ids(hass: HomeAssistant, co
     coordinator.runtime = NanoleafLtpduRuntime(hass, fake)  # type: ignore[arg-type]
     await coordinator.async_load_scene_registry()
 
-    # Reserved factory scenes are present from the start, with no allocation call.
+    # Reserved factory scenes are present from the start, with no allocation call —
+    # all five of them (0xFA-0xFE), not just Northern Lights.
     assert coordinator.scenes["Northern Lights"] == next(iter(RESERVED_SCENE_NAMES))
+    assert set(RESERVED_SCENE_NAMES) == {0xFA, 0xFB, 0xFC, 0xFD, 0xFE}
+    for scene_id, name in RESERVED_SCENE_NAMES.items():
+        assert coordinator.scenes[name] == scene_id
 
     first_id = await coordinator.async_allocate_scene_id("Sunset")
     second_id = await coordinator.async_allocate_scene_id("Ocean")
