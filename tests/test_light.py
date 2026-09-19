@@ -17,7 +17,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.light import ATTR_BRIGHTNESS, ATTR_EFFECT, ATTR_HS_COLOR
 
-from custom_components.nanoleaf_ltpdu.const import CONF_AUTH_TOKEN, CONF_HOST, CONF_LABEL_ID, DOMAIN
+from custom_components.nanoleaf_ltpdu.const import CONF_AUTH_TOKEN, CONF_HOST, CONF_LABEL_ID, DOMAIN, SCENE_LIBRARY_KEY
 from custom_components.nanoleaf_ltpdu.light import NanoleafLtpduLight, _coerce_int, _model_from_title
 from custom_components.nanoleaf_ltpdu.protocol import ci
 
@@ -71,6 +71,23 @@ class _FakeCoordinator:
         self.scenes.pop(name, None)
 
 
+class _FakeSceneLibrary:
+    def __init__(self) -> None:
+        self.saved_recipes: list[tuple] = []
+
+    async def async_save_recipe(self, name: str, motion_style: str, motion_params: dict, colors: list[dict]) -> None:
+        self.saved_recipes.append((name, motion_style, motion_params, colors))
+
+
+class _FakeHass:
+    """Just enough of hass for async_list_device_scenes'
+    `self.hass.data[SCENE_LIBRARY_KEY]` lookup — no real HomeAssistant instance
+    needed for these tests."""
+
+    def __init__(self, scene_library: _FakeSceneLibrary) -> None:
+        self.data = {SCENE_LIBRARY_KEY: scene_library}
+
+
 def _make_light(
     records: list[dict],
     scenes: dict[str, int] | None = None,
@@ -80,6 +97,7 @@ def _make_light(
     coordinator = _FakeCoordinator(records, scenes, current_scene_id)
     light = NanoleafLtpduLight(coordinator, entry)  # type: ignore[arg-type]
     light.async_write_ha_state = lambda: None  # type: ignore[method-assign] — no real hass to write to
+    light.hass = _FakeHass(_FakeSceneLibrary())  # type: ignore[assignment]
     return light
 
 
@@ -306,6 +324,15 @@ async def test_list_device_scenes_reads_from_device_and_resolves_known_names() -
     # effect_list (read from coordinator.scenes) just changed — state is pushed
     # immediately rather than waiting for the next poll.
     assert write_calls == 1
+    # Every scene's full recipe is recorded in the shared library too — same as a
+    # regular save_scene call — so the editor can load it back in without another
+    # refresh, surviving a page reload/HA restart.
+    library = light.hass.data[SCENE_LIBRARY_KEY]
+    assert library.saved_recipes == [
+        ("Northern Lights", "stripes", {"speed": 0x14, "direction": 0x00, "segment": 0x14}, [{"hue": 227, "saturation": 100, "brightness": 100}]),
+        ("Sunset", "fade", {"speed": 0x0E, "delay": 0x00, "loop": 0x01}, [{"hue": 0, "saturation": 96, "brightness": 73}]),
+        ("Unknown Scene 251", "fade", {"speed": 0x0E, "delay": 0x00, "loop": 0x01}, [{"hue": 1, "saturation": 96, "brightness": 73}]),
+    ]
 
 
 async def test_list_device_scenes_does_not_write_state_when_nothing_new_found() -> None:

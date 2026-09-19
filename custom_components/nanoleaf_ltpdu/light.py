@@ -227,7 +227,13 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], LightEntit
         strip actually holds is a fact worth persisting, not just a one-off
         preview — otherwise it silently reverts to invisible (missing from
         effect_list) the next time HA restarts or the page reloads, and this
-        service has to be called again to see it."""
+        service has to be called again to see it. Every scene's full recipe
+        (motion style/params/colors) is likewise recorded in the shared library —
+        same as a regular save_scene call — so the editor can load it back in
+        without another refresh; a refresh is inherently reading the strip's own
+        current truth, so overwriting a stale library entry under the same name is
+        correct, not a data-loss risk."""
+        library = self.hass.data[SCENE_LIBRARY_KEY]
         reverse_names = {sid: name for name, sid in self.coordinator.scenes.items()}
         scenes: dict[str, dict[str, Any]] = {}
         registered_any = False
@@ -239,11 +245,15 @@ class NanoleafLtpduLight(CoordinatorEntity[NanoleafLtpduCoordinator], LightEntit
                 await self.coordinator.async_assign_scene_id(name, scene_id)
                 reverse_names[scene_id] = name
                 registered_any = True
+            motion_style = ci.MOTIONS.get(style_id, f"0x{style_id:02x}").lower()
+            motion_params = scene_services.decode_motion_params(style_id, params)
+            decoded_colors = scene_services.decode_colors(colors)
+            await library.async_save_recipe(name, motion_style, motion_params, decoded_colors)
             scenes[str(scene_id)] = {
                 "name": name,
-                "motion_style": ci.MOTIONS.get(style_id, f"0x{style_id:02x}").lower(),
-                "motion_params": scene_services.decode_motion_params(style_id, params),
-                "colors": scene_services.decode_colors(colors),
+                "motion_style": motion_style,
+                "motion_params": motion_params,
+                "colors": decoded_colors,
             }
         if registered_any:
             # effect_list is read straight from coordinator.scenes (see that

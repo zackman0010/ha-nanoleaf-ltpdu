@@ -129,8 +129,16 @@ export class NanoleafScenePanel extends LitElement {
     this._refreshing = true;
     this._refreshError = undefined;
     try {
-      const response = await fetchDeviceScenes(this._hass, entityId);
-      this._deviceScenes = { ...this._deviceScenes, [entityId]: response };
+      // The backend also records every scene's full recipe in the shared library
+      // (see light.py's async_list_device_scenes) — re-fetch it here too, or panel
+      // 3 and the library-fallback path in _loadRowIntoEditor would keep showing
+      // this._library's pre-refresh snapshot until the next page load.
+      const [deviceScenes, library] = await Promise.all([
+        fetchDeviceScenes(this._hass, entityId),
+        fetchLibrary(this._hass),
+      ]);
+      this._deviceScenes = { ...this._deviceScenes, [entityId]: deviceScenes };
+      this._library = library;
     } catch (err) {
       this._refreshError = describeError(err);
     } finally {
