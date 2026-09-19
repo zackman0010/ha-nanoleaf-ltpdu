@@ -159,47 +159,38 @@ export class NanoleafMotionPreview extends LitElement {
     const stops = hardStops ? this._hardStops(palette) : this._softStops(palette);
     bar.style.backgroundImage = `linear-gradient(90deg, ${stops})`;
 
-    // Both rely on native CSS tiling (background-repeat) for a seamless loop —
-    // going past one tile just shows the next identical one, rather than exposing
-    // empty background past the image's edge. One tile is the full run of colors;
-    // Stripes' Segment shrinks it to fit more repeats across the bar (smaller
-    // segment = narrower/more-numerous stripes), Flow always uses a single
-    // full-width tile. Size is tracked in px, not %: a percentage background-size
-    // combined with a percentage background-position resolves the position against
-    // (positioning-area size − background-size), which only lines up with a clean
-    // one-tile-per-cycle loop when background-size is exactly 100% — never true
-    // here once repeats > 1.
-    const repeats = hardStops ? this._stripeRepeats() : 1;
-    const tileWidthPx = barWidthPx / repeats;
+    // Segment sets each color's own width as a percentage of the bar's width —
+    // confirmed on real hardware: Segment=100 makes one color fill the whole bar
+    // (so N colors span N bar-widths); Segment=20 with 7 colors shows 5-6 of them
+    // at once (7 colors * 20% = 140% of the bar per full cycle). Flow has no
+    // Segment field — its one gradient always fills exactly one bar-width.
+    // Clamped to 1px so a Segment of 0 can't produce an invalid zero-size tile.
+    const tileWidthPx = hardStops ? Math.max(1, ((this.params.segment ?? 50) / 100) * barWidthPx * palette.length) : barWidthPx;
     bar.style.backgroundRepeat = "repeat";
     bar.style.backgroundSize = `${tileWidthPx}px 100%`;
 
-    // direction=0 (unchecked) scrolls left-to-right, direction=1 (checked) scrolls
-    // right-to-left. Loop is ignored on purpose — confirmed on real hardware that
+    // direction=0 (unchecked) scrolls right-to-left, direction=1 (checked) scrolls
+    // left-to-right. Loop is ignored on purpose — confirmed on real hardware that
     // it has no observable effect, so a preview that stops on loop=off would be
-    // actively misleading. The whole visible bar's pattern completes one full
-    // loop every speedMs, regardless of how many stripe-repeats are packed into
-    // it — scrolling by the full bar width (an exact multiple of one tile, so
-    // still seamless) rather than just one tile width, which would make more
-    // repeats scroll proportionally slower for the same Speed.
-    const direction = (this.params.direction ?? 0) === 0 ? -1 : 1;
-    const cycleMs = speedMs(this.params);
+    // actively misleading. Speed is how fast the visible window moves, not how
+    // fast colors change: confirmed on real hardware that the window moves
+    // exactly one bar-width every Speed interval, regardless of Segment. Position
+    // grows without bound rather than being reset modulo one cycle — a bar-width
+    // step is only a whole multiple of one tile when Segment*palette.length
+    // divides 100 evenly, so wrapping it ourselves would visibly snap in the
+    // general case; background-repeat's own tiling wraps it instead.
+    const direction = (this.params.direction ?? 0) === 0 ? 1 : -1;
     const elapsed = now - this._startedAt;
-    const progress = (elapsed % cycleMs) / cycleMs;
-    bar.style.backgroundPositionX = `${direction * progress * barWidthPx}px`;
-  }
-
-  private _stripeRepeats(): number {
-    const segment = this.params.segment ?? 50;
-    // segment=100 (widest) -> a single pass across the whole bar; segment=0
-    // (narrowest) -> several repeats, i.e. thinner/more-numerous stripes.
-    // Illustrative scaling, not a claim about a real physical stripe count.
-    return Math.max(1, Math.round(1 + ((100 - segment) / 100) * 6));
+    const offsetPx = direction * (elapsed / speedMs(this.params)) * barWidthPx;
+    bar.style.backgroundPositionX = `${offsetPx}px`;
   }
 
   private _softStops(palette: string[]): string {
-    // Repeat the first color at the end so the loop point is seamless.
-    return [...palette, palette[0]].join(", ");
+    // No need to repeat the first color at the end — the tile is exactly one bar
+    // width with background-repeat: repeat, so tiling itself supplies the return
+    // to the first color at the wrap point. Duplicating it here would double that
+    // band every time the pattern repeats.
+    return palette.join(", ");
   }
 
   private _hardStops(palette: string[]): string {
@@ -240,7 +231,7 @@ export class NanoleafMotionPreview extends LitElement {
     }
     .segment.gradient {
       transition-property: none;
-      /* background-repeat is set per-frame in JS (Flow: no-repeat, Stripes: repeat) */
+      /* background-image/size/repeat/position are all set per-frame in JS */
     }
   `;
 }
