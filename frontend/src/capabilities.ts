@@ -91,9 +91,17 @@ export function fetchStrips(hass: HomeAssistant): Promise<StripsResponse> {
 
 // Reads every scene actually stored on the strip's own flash (an LTPDU round trip per
 // scene) rather than the locally-known name registry — see light.py's
-// async_list_device_scenes.
-export function fetchDeviceScenes(hass: HomeAssistant, entityId: string): Promise<DeviceScenesResponse> {
-  return callServiceWithResponse<DeviceScenesResponse>(hass, "list_device_scenes", {}, { entity_id: entityId });
+// async_list_device_scenes. Unlike the domain-level services above, this is an
+// *entity*-targeted service — HA wraps its response as {entity_id: response} (to
+// cover multi-entity targets), even though this call only ever targets one.
+export async function fetchDeviceScenes(hass: HomeAssistant, entityId: string): Promise<DeviceScenesResponse> {
+  const byEntity = await callServiceWithResponse<Record<string, DeviceScenesResponse>>(
+    hass,
+    "list_device_scenes",
+    {},
+    { entity_id: entityId }
+  );
+  return byEntity[entityId];
 }
 
 /** get_scene_capabilities' field_ranges is global/flat across every motion style —
