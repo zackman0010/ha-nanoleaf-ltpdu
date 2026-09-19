@@ -37,6 +37,14 @@ export interface SceneLibraryResponse {
   recipes: Record<string, SceneRecipe>;
 }
 
+export interface StripInfo {
+  name: string;
+}
+
+export interface StripsResponse {
+  strips: Record<string, StripInfo>; // keyed by entity_id
+}
+
 const DOMAIN = "nanoleaf_ltpdu";
 
 async function callServiceWithResponse<T>(
@@ -62,6 +70,10 @@ export function fetchCapabilities(hass: HomeAssistant): Promise<SceneCapabilitie
 
 export function fetchLibrary(hass: HomeAssistant): Promise<SceneLibraryResponse> {
   return callServiceWithResponse<SceneLibraryResponse>(hass, "get_scene_library");
+}
+
+export function fetchStrips(hass: HomeAssistant): Promise<StripsResponse> {
+  return callServiceWithResponse<StripsResponse>(hass, "list_strips");
 }
 
 /** get_scene_capabilities' field_ranges is global/flat across every motion style —

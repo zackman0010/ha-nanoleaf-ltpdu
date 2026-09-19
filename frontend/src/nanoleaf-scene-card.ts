@@ -18,7 +18,6 @@ import {
 import { hexToHsb, hsbToHex } from "./color";
 import type { HomeAssistant, LovelaceCardConfig } from "./ha-types";
 import "./motion-preview";
-import "./nanoleaf-scene-card-editor";
 
 const DOMAIN = "nanoleaf_ltpdu";
 const RESERVED_SCENE_NAME = "Northern Lights";
@@ -82,10 +81,6 @@ export class NanoleafSceneCard extends LitElement {
 
   public static getStubConfig(): LovelaceCardConfig {
     return { type: "custom:nanoleaf-scene-card", entity: "" };
-  }
-
-  public static getConfigElement(): HTMLElement {
-    return document.createElement("nanoleaf-scene-card-editor");
   }
 
   public setConfig(config: LovelaceCardConfig): void {
@@ -668,13 +663,3 @@ declare global {
     "nanoleaf-scene-card": NanoleafSceneCard;
   }
 }
-
-interface CustomCardWindow extends Window {
-  customCards: Record<string, unknown>[];
-}
-(window as unknown as CustomCardWindow).customCards ??= [];
-(window as unknown as CustomCardWindow).customCards.push({
-  type: "nanoleaf-scene-card",
-  name: "Nanoleaf Scene Editor",
-  description: "Create, preview, and manage Nanoleaf LTPDU scenes.",
-});

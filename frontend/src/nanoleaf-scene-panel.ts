@@ -1,40 +1,113 @@
-// Milestone 1 smoke test (see the plan): confirms what Home Assistant actually sets
-// on a panel_custom element before Milestone 2 builds the real strip picker +
-// embedded editor on top of it. Not verified against local source (home-assistant-
-// frontend isn't installed in this Python-only dev environment) — describe(), not
-// JSON.stringify(), because `route`/`panel` may not serialize cleanly.
-import { LitElement, html, css } from "lit";
-import { customElement, property } from "lit/decorators.js";
+// The "Nanoleaf Scenes" sidebar page: a strip picker (auto-selected when there's
+// only one) wrapping the existing <nanoleaf-scene-card> editor unmodified. HA sets
+// hass/narrow/route/panel directly on this element the same way Lovelace sets
+// .hass on a card (confirmed live — see the plan's Milestone 1).
+import { LitElement, html, css, nothing } from "lit";
+import { customElement, state } from "lit/decorators.js";
+import { createRef, ref, type Ref } from "lit/directives/ref.js";
 
-function describe(value: unknown): string {
-  if (value === undefined) return "undefined";
-  if (value === null) return "null";
-  if (typeof value !== "object") return `${typeof value}: ${String(value)}`;
-  try {
-    return `object, keys: ${Object.keys(value as object).join(", ") || "(none)"}`;
-  } catch {
-    return `object (${typeof value})`;
-  }
-}
+import { fetchStrips, type StripsResponse } from "./capabilities";
+import type { HomeAssistant } from "./ha-types";
+import "./nanoleaf-scene-card";
+import type { NanoleafSceneCard } from "./nanoleaf-scene-card";
 
 @customElement("nanoleaf-scene-panel")
 export class NanoleafScenePanel extends LitElement {
-  @property({ attribute: false }) hass?: unknown;
-  @property({ attribute: false }) narrow?: boolean;
-  @property({ attribute: false }) route?: unknown;
-  @property({ attribute: false }) panel?: unknown;
+  @state() private _strips?: StripsResponse["strips"];
+  @state() private _selected?: string;
+  @state() private _loadError?: string;
+
+  private _hass?: HomeAssistant;
+  private _loadStarted = false;
+  private _cardRef: Ref<NanoleafSceneCard> = createRef();
+  private _cardConfiguredFor?: string;
+
+  public set hass(hass: HomeAssistant) {
+    this._hass = hass;
+    if (!this._loadStarted) {
+      this._loadStarted = true;
+      void this._loadStrips();
+    }
+    this.requestUpdate();
+  }
+
+  public get hass(): HomeAssistant | undefined {
+    return this._hass;
+  }
+
+  private async _loadStrips(): Promise<void> {
+    if (!this._hass) {
+      return;
+    }
+    try {
+      const { strips } = await fetchStrips(this._hass);
+      this._strips = strips;
+      const ids = Object.keys(strips);
+      if (ids.length === 1) {
+        this._selected = ids[0];
+      }
+    } catch (err) {
+      this._loadError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  private _onSelect(entityId: string): void {
+    this._selected = entityId || undefined;
+  }
+
+  // Keeps the embedded card's .hass/setConfig in sync imperatively — it isn't a
+  // reactive property on that element, just like on a real Lovelace dashboard.
+  protected updated(): void {
+    const card = this._cardRef.value;
+    if (!card || !this._selected || !this._hass) {
+      return;
+    }
+    card.hass = this._hass;
+    if (this._cardConfiguredFor !== this._selected) {
+      card.setConfig({ type: "custom:nanoleaf-scene-card", entity: this._selected });
+      this._cardConfiguredFor = this._selected;
+    }
+  }
 
   protected render() {
+    if (!this._hass) {
+      return nothing;
+    }
+    if (this._loadError) {
+      return html`<div class="content"><p class="error">${this._loadError}</p></div>`;
+    }
+    if (!this._strips) {
+      return html`<div class="content"><p>Loading…</p></div>`;
+    }
+
+    const ids = Object.keys(this._strips);
+    if (ids.length === 0) {
+      return html`
+        <div class="content">
+          <h1>Nanoleaf Scenes</h1>
+          <p class="muted">No Nanoleaf LTPDU strips configured yet. Add one under Settings → Devices & Services.</p>
+        </div>
+      `;
+    }
+
     return html`
       <div class="content">
         <h1>Nanoleaf Scenes</h1>
-        <p>Milestone 1 smoke test — what Home Assistant sets on this element:</p>
-        <ul>
-          <li><code>hass</code>: ${describe(this.hass)}</li>
-          <li><code>narrow</code>: ${describe(this.narrow)}</li>
-          <li><code>route</code>: ${describe(this.route)}</li>
-          <li><code>panel</code>: ${describe(this.panel)}</li>
-        </ul>
+        ${ids.length > 1
+          ? html`
+              <label class="field">
+                <span>Strip</span>
+                <select @change=${(e: Event) => this._onSelect((e.target as HTMLSelectElement).value)}>
+                  <option value="" ?selected=${!this._selected}>Select a strip…</option>
+                  ${ids.map(
+                    (id) =>
+                      html`<option value=${id} ?selected=${id === this._selected}>${this._strips![id].name}</option>`
+                  )}
+                </select>
+              </label>
+            `
+          : nothing}
+        ${this._selected ? html`<nanoleaf-scene-card ${ref(this._cardRef)}></nanoleaf-scene-card>` : nothing}
       </div>
     `;
   }
@@ -42,13 +115,24 @@ export class NanoleafScenePanel extends LitElement {
   static styles = css`
     .content {
       padding: 16px;
-      font-family: var(--paper-font-body1_-_font-family, sans-serif);
-      color: var(--primary-text-color, #000);
+      max-width: 600px;
+      margin: 0 auto;
     }
-    code {
-      background: var(--secondary-background-color, #eee);
-      padding: 1px 4px;
-      border-radius: 3px;
+    h1 {
+      font-size: 1.5em;
+      margin: 0 0 16px;
+    }
+    .field {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .muted {
+      color: var(--secondary-text-color);
+    }
+    .error {
+      color: var(--error-color, #db4437);
     }
   `;
 }
